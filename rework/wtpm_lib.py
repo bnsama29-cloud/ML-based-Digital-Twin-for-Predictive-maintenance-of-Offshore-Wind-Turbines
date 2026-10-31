@@ -24,13 +24,36 @@ THRESHOLD_Q = 0.99              # fixed before looking at any test result
 
 # ---------------------------------------------------------------- data access
 
-def fetch_member(member: str, dest_dir: str) -> str:
-    """Extract one file from the Zenodo zip with HTTP range requests (no 5.5 GB download)."""
+def fetch_member(member: str, dest_dir: str, attempts: int = 5, wait_s: float = 30.0) -> str:
+    """Extract one file from the Zenodo zip with HTTP range requests (no 5.5 GB download).
+
+    Downloads into a temporary folder and moves the file into place only when complete,
+    so a dropped connection never leaves a half-written CSV behind. Retries with backoff.
+    """
+    import shutil
+    import tempfile
+    import time
+
     from remotezip import RemoteZip
     out = os.path.join(dest_dir, member)
-    if not os.path.exists(out):
-        with RemoteZip(ZENODO_URL) as z:
-            z.extract(member, dest_dir)
+    if os.path.exists(out):
+        return out
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    for attempt in range(1, attempts + 1):
+        tmp = tempfile.mkdtemp(dir=dest_dir)
+        try:
+            with RemoteZip(ZENODO_URL, timeout=(20, 300)) as z:
+                z.extract(member, tmp)
+            shutil.move(os.path.join(tmp, member), out)
+            return out
+        except Exception as err:  # network errors, HTTP 429/5xx, truncated reads
+            if attempt == attempts:
+                raise
+            print(f"download of {member} failed ({err!r}); retry {attempt}/{attempts - 1}",
+                  flush=True)
+            time.sleep(wait_s * attempt)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
     return out
 
 

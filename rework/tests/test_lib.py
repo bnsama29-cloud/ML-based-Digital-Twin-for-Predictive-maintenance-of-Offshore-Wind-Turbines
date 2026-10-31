@@ -83,3 +83,33 @@ def test_time_to_threshold_on_a_linear_decline():
     assert slope[-1] == pytest.approx(-0.01)
     assert ttt[-1] == pytest.approx((hi[-1] - 0.2) / 0.01)
     assert lo[-1] <= ttt[-1] <= hi_band[-1]
+
+
+def test_fetch_member_retries_and_never_leaves_partial_file(tmp_path, monkeypatch):
+    import types
+    calls = {"n": 0}
+
+    class FakeZip:
+        def __init__(self, url, **kw):
+            assert "timeout" in kw
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract(self, member, dest):
+            calls["n"] += 1
+            path = os.path.join(dest, member)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write("partial" if calls["n"] == 1 else "a;b\n1;2\n")
+            if calls["n"] == 1:
+                raise ConnectionError("dropped")
+
+    monkeypatch.setitem(sys.modules, "remotezip", types.SimpleNamespace(RemoteZip=FakeZip))
+    out = L.fetch_member("x/y.csv", str(tmp_path), wait_s=0)
+    assert calls["n"] == 2
+    assert open(out).read() == "a;b\n1;2\n"
+    assert sorted(os.listdir(tmp_path)) == ["x"]          # temp folders cleaned up
