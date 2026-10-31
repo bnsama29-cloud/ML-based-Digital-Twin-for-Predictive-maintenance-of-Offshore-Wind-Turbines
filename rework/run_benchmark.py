@@ -1,7 +1,7 @@
 """Detection + attribution benchmark on all 58 CARE farm C datasets, split into shards.
 
-Kaggle (one shard per teammate account, GPU on, Internet on):
-    python run_benchmark.py --shard 0 --n-shards 3 --out /kaggle/working
+Normally called by run_all.py (one Kaggle account does everything).
+Sharding is optional: --n-shards N --shard k splits the 58 datasets if you ever want to.
 Resumable: datasets already in results_shard<k>.csv are skipped.
 """
 import argparse
@@ -14,12 +14,13 @@ import pandas as pd
 import wtpm_lib as L
 
 AE_SEEDS = (0, 1, 2)
+KEEP_ON_DISK = {44, 61}   # analyze_44.py needs these afterwards
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--shard", type=int, required=True)
-    ap.add_argument("--n-shards", type=int, default=3)
+    ap.add_argument("--shard", type=int, default=0)
+    ap.add_argument("--n-shards", type=int, default=1)
     ap.add_argument("--data-dir", default="data")
     ap.add_argument("--out", default="out")
     ap.add_argument("--events", type=int, nargs="*", help="override: run only these event ids")
@@ -82,7 +83,7 @@ def main():
                 rows.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
         print(f"event {eid} ({ev['event_label']}): {len(prep.columns)} features, "
               f"{time.time() - t0:.0f}s")
-        if not a.keep_files:
+        if not a.keep_files and eid not in KEEP_ON_DISK:
             f = os.path.join(a.data_dir, L.FARM_PREFIX, "datasets", f"{eid}.csv")
             if os.path.exists(f):
                 os.remove(f)

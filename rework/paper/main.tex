@@ -105,7 +105,7 @@ Training uses Adam (learning rate $10^{-3}$), batches of 256 and at most 40 epoc
 
 A row is flagged when $e(t)$ exceeds the 99th percentile of validation scores. Single flagged rows are common in any year of SCADA, so an alarm needs persistence. The benchmark's counter \cite{r12} is used as published: it rises by one on a flagged normal-status row, falls by one (not below zero) on a clean normal-status row, and holds on other statuses. An alarm is raised when it reaches 72, i.e.\ 12~h of net abnormal behaviour. An anomaly event counts as detected if an alarm occurs inside its labelled window; a normal dataset counts as a false alarm if an alarm occurs anywhere in its prediction window.
 
-\begin{table}[t]
+\begin{table}[!t]
 \caption{Settings fixed before evaluation}
 \label{tab:settings}
 \centering
@@ -166,7 +166,7 @@ A simplified rotor, nacelle and tower were built in Unity. A loader reads a time
 \subsection{Detection on 58 events}
 Table~\ref{tab:detection} lists the results. \PH{Two or three sentences: which method detects most events, at what false-alarm rate; whether the AE beats the baselines on ROC-AUC beyond the seed spread; how much the sigmoid head changes the result. Report what the numbers show, including if a baseline wins.} Point-wise PR-AUC is high for every method because the labelled window covers most of each prediction window; the prevalence of \PH{0.xx} is the score a random detector would reach, so ROC-AUC is the more useful comparison here. Detection delay, measured from the labelled event start, had a median of \PH{h}~h for the autoencoder.
 
-\begin{table}[t]
+\begin{table}[!t]
 \caption{Detection on farm C (26 anomaly, 32 normal datasets). AE: mean $\pm$ s.d.\ over 3 seeds. 95\% Wilson intervals in brackets.}
 \label{tab:detection}
 \centering
@@ -187,7 +187,7 @@ PCA & \PH{}/26 & \PH{}/32 & \PH{} & \PH{}\\
 \subsection{Attribution against operator notes}
 Table~\ref{tab:attribution} scores the plant-area ranking. \PH{State the top-1 and top-3 hit rates against the two floors. Pitch faults dominate the notes, so say plainly whether the ranking beats ``always pitch''.} Dividing by each channel's own validation error matters: with summed scores, large groups such as electrical and cooling win most rankings regardless of the fault \PH{confirm with the sum row}.
 
-\begin{table}[t]
+\begin{table}[!t]
 \caption{Top-$k$ hit rate of attribution on \PH{n} labelled anomaly events}
 \label{tab:attribution}
 \centering
@@ -204,32 +204,32 @@ Random ranking & \PH{} & \PH{}\\
 \end{table}
 
 \subsection{Case study: cooling-water valve fault (dataset 44)}
-The operator note for dataset 44 reads ``valve in water cooling system was left in wrong position after maintenance''. Fig.~\ref{fig:hi} shows HI over the year. \PH{Describe what HI does before and during the labelled window, and when, if at all, the alarm first fires relative to the event start (\,$\pm$ hours).} Fig.~\ref{fig:rca} ranks the plant areas over the event window; cooling is ranked \PH{rank} of ten.
+The operator note for dataset 44 reads ``valve in water cooling system was left in wrong position after maintenance''. Fig.~\ref{fig:hi} shows HI over the year. \PH{Describe what HI does before and during the labelled window. Give the first alarm time relative to the event start, or, if the fixed rule raised no alarm, say so plainly and give the ROC-AUC for this file instead.} Fig.~\ref{fig:rca} ranks the plant areas over the event window; cooling is ranked \PH{rank} of ten.
 
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
 \includegraphics[width=\columnwidth]{figures/fig_hi.png}
 \caption{Health index for dataset 44 with alarm periods and the labelled event (shaded).}
 \label{fig:hi}
 \end{figure}
 
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
 \includegraphics[width=0.85\columnwidth]{figures/fig_rca.png}
 \caption{Plant-area attribution over the labelled window of dataset 44.}
 \label{fig:rca}
 \end{figure}
 
-Fig.~\ref{fig:ttt} shows $\widehat T$ and its band in the prediction window. \PH{Describe how wide the band is and whether $\widehat T$ crosses the 168 h gate inside the event.} Table~\ref{tab:gate} shows how the first work order moves with the gate and buffer. \PH{One sentence: earlier gates warn sooner but also trigger on the validation slice \,(n triggers), which is the cost of a looser gate.}
+Fig.~\ref{fig:ttt} shows $\widehat T$ and its band in the prediction window. \PH{Describe how wide the band is and whether $\widehat T$ crosses the 168 h gate inside the event. If no alarm fired, no work order is raised at any gate; state that.} Table~\ref{tab:gate} shows how the first work order moves with the gate and buffer. \PH{One sentence: earlier gates warn sooner but also trigger on the validation slice \,(n triggers), which is the cost of a looser gate.}
 
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
 \includegraphics[width=\columnwidth]{figures/fig_ttt.png}
 \caption{Time to $\mathrm{HI}=0.2$ with a 95\% band from the slope standard error.}
 \label{fig:ttt}
 \end{figure}
 
-\begin{table}[t]
+\begin{table}[!t]
 \caption{Gate sensitivity on dataset 44 (hours relative to event start)}
 \label{tab:gate}
 \centering
@@ -247,7 +247,7 @@ Gate $G$ & First trigger & Visit ($B$=24 h) & Triggers in val.\\
 \subsection{Temperature normal-behaviour model}
 Table~\ref{tab:temp} gives the hold-out scores. \PH{Compare gradient boosting with the linear model and the mean floor, on the same turbine and on turbine 61. Note any drop across turbines.} Fig.~\ref{fig:temp} shows the cooling-water outlet temperature against its expected value during the fault: the mean residual is \PH{r1}~$^\circ$C on the validation slice and \PH{r2}~$^\circ$C inside the event, which is consistent with the valve fault described by the operator.
 
-\begin{table}[t]
+\begin{table}[!t]
 \caption{Temperature model, gradient boosting (95\% day-block bootstrap CI)}
 \label{tab:temp}
 \centering
@@ -264,7 +264,7 @@ Cooling water out & turbine 61 & \PH{} & \PH{}\\
 \end{tabular}
 \end{table}
 
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
 \includegraphics[width=\columnwidth]{figures/fig_temp.png}
 \caption{Measured and expected generator cooling-water outlet temperature in the prediction window of dataset 44.}
@@ -277,7 +277,7 @@ Cooling water out & turbine 61 & \PH{} & \PH{}\\
 \subsection{Playback scene}
 Fig.~\ref{fig:unity} is a frame from the Unity slider driven by the exported CSV. Every value on screen is either a measured SCADA reading or a model output for that time stamp. The scene is a briefing view, not evidence that the residual model is correct.
 
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
 \IfFileExists{figures/warning.png}{\includegraphics[width=\columnwidth]{figures/warning.png}}{\fbox{\parbox{0.9\columnwidth}{\centering Unity frame goes here}}}
 \caption{Unity playback of one sample from dataset 44. \PH{re-export the frame from unity\_telemetry.csv}}
@@ -287,7 +287,7 @@ Fig.~\ref{fig:unity} is a frame from the Unity slider driven by the exported CSV
 \subsection{Place in the literature}
 Table~\ref{tab:scope} compares the scope of this pipeline with four published SCADA or twin papers. The point of the table is coverage, not a claim that every cell is state of the art.
 
-\begin{table}[t]
+\begin{table}[!t]
 \caption{Scope against selected prior papers}
 \label{tab:scope}
 \centering
