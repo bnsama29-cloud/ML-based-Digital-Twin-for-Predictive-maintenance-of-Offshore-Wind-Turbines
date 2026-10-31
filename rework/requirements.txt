@@ -1,0 +1,7 @@
+remotezip>=0.12
+torch
+scikit-learn
+pandas
+numpy
+matplotlib
+pytest
