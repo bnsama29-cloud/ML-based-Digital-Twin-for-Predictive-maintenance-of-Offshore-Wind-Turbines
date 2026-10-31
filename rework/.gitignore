@@ -1,0 +1,8 @@
+__pycache__/
+.pytest_cache/
+out*/
+data/
+*.pdf
+*.aux
+*.log
+IEEEtran.cls
