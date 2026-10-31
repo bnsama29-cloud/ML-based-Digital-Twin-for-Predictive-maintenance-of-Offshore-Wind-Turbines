@@ -1,43 +1,35 @@
-# Running the rework on Kaggle (3 accounts, one per teammate)
+# Running the rework on Kaggle (one account, one run)
 
-Each teammate runs **one shard** on their own Kaggle account. Shards split the 58 farm C
-datasets (26 anomaly, 32 normal) about 20 each. Measured locally: one dataset takes
-about 2.5 min on a 2-core CPU (4 autoencoders + Isolation Forest + PCA), plus the
-~300 MB download from Zenodo. Expect roughly 1–2 h per shard. A GPU helps the
-autoencoders but is not required.
+One notebook does everything: all 58 farm C datasets (26 anomaly, 32 normal), the
+dataset-44 deep dive, and the paper tables.
+
+**Time:** about 3–5 h in total (estimate). Measured locally: 2.3 min per dataset on a
+2-core CPU plus a ~300 MB download each; the deep dive took 1.3 min. Kaggle's limit is
+12 h per run, so it fits.
 
 ## Notebook settings
-- Settings → Internet **on** (needed to stream files from Zenodo; needs a phone-verified account)
-- Accelerator: GPU T4 if available, otherwise CPU is fine
-- Use **Save Version → Save & Run All (Commit)** so it keeps running after you close the tab
+- Settings → Internet **on** (streams files from Zenodo; needs a phone-verified account)
+- Accelerator: GPU T4 if available (faster), CPU also works
+- Click **Save Version → Save & Run All (Commit)** so it keeps running after you close the tab
 
-## Cell 1 — setup (same for everyone)
+## Cell 1 — setup
 ```python
 !pip -q install remotezip
 !git clone -q --depth 1 -b rework-2026 https://github.com/bnsama29-cloud/ml-based-digital-twin-for-predictive-maintenance-of-offshore-wind-turbines.git repo
 %cd repo/rework
 ```
 
-## Cell 2 — the shard (change only SHARD)
+## Cell 2 — run everything
 ```python
-SHARD = 0   # Samarth = 0, Ananth = 1, Roshan = 2
-!python run_benchmark.py --shard {SHARD} --n-shards 3 --data-dir /tmp/care --out /kaggle/working/shard{SHARD}
+!python run_all.py --data-dir /tmp/care --out /kaggle/working/results
 ```
-If the run stops halfway, run it again: finished datasets are skipped.
+If the run stops halfway, run the notebook again: finished datasets are skipped.
 
-## Cell 3 — only on shard 0: the dataset-44 deep dive (CPU, ~10 min)
-```python
-!python analyze_44.py --data-dir /tmp/care --out /kaggle/working/deep44
-```
-
-## After all three finish
-Download `/kaggle/working/shard*/` from each account (Output tab), put the three folders
-side by side, then:
-```bash
-python merge_results.py --inputs shard0 shard1 shard2 --out paper_tables
-```
-`paper_tables/detection.tex` and `attribution.tex` go into the paper; `deep44/` holds the
-figures and CSVs for Section V-B to V-E.
+## What comes out (Output tab → download `results/`)
+- `results/paper_tables/detection.tex`, `attribution.tex` → Tables II and III
+- `results/deep44/` → Figs. 2–5, `gate_sensitivity.csv`, `temperature_model.csv`,
+  `robustness.csv`, `unity_telemetry.csv` (feed this to the Unity scene)
+- `results/benchmark/` → raw per-dataset results and training logs
 
 ## Rules fixed before looking at results (do not change after seeing them)
 - training rows: `train_test == train` and status 0/2; last 15 % = validation
