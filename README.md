@@ -66,7 +66,7 @@ periods; 0.5 = random predictions; the benchmark's per-farm tuned AE reports 0.6
   month before the fault window closed, and the generator was the top-ranked area; a
   cooling-water valve fault (dataset 44) went undetected, yet cooling was still the top area.
 - **Cost:** every detector trains in under 25 s per turbine-year on a T4 GPU and scores
-  1000 rows in at most 10 ms.
+  1000 rows in about 10 ms or less (AE, PCA, Isolation Forest).
 
 Full tables: [`results/`](results). Figures: [`figures/`](figures).
 
