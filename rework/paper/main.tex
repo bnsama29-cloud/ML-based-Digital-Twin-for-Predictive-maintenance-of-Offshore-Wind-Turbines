@@ -14,7 +14,7 @@
 
 \begin{document}
 
-\title{Does Condition Normalisation Help Autoencoder Fault Detection? A Leakage-Safe Evaluation on All 95 CARE-to-Compare Wind Turbine Datasets}
+\title{A Leakage-Safe Autoencoder Framework for Early Fault Detection and Subsystem Attribution in Wind Turbines Using SCADA Data}
 
 \author{
 \IEEEauthorblockN{N Ananth}
@@ -57,7 +57,7 @@ Offshore plants often produce more energy than onshore machines of similar ratin
 
 Normal behaviour models do this by learning what the sensors look like when the turbine is healthy and flagging departures from it \cite{r21,r22,r23}. Autoencoders are popular because one network can watch hundreds of channels at once \cite{r10,r11,r25}. Their reconstruction error, however, depends on the operating point: a healthy turbine at rated power and one idling in light wind do not have the same typical error. The benchmark paper we use handles this with an adaptive threshold, a second network that predicts the expected error, tuned per farm \cite{r12}, and a conditional autoencoder that takes operating conditions as input has been proposed for district heating \cite{r19}. Whether such corrections help on a large, labelled set of real faults, and by how much once tuning is taken out of the comparison, is less clear. Many published results also come from one turbine, one fault, or a random split that places fault rows in the training set \cite{r12,r28,r29}.
 
-An earlier version of this work had exactly those problems: it trained on a file that already contained the fault, reported no detection rates, used a sigmoid output on standardised data and compared against nothing. CSITSS reviewers rightly asked for a clean split, precision and false-alarm rates, baselines, repeated runs, justified thresholds and an uncertainty band on the life estimate. This paper answers each point and reports the outcome even where it is negative. Its contributions are:
+This leaves a gap: no study we know of tests these corrections on every fault and normal period of a public benchmark with all settings fixed in advance, and checks the resulting fault attribution against what operators actually repaired. This paper aims to close it. Its objectives are to measure, without leakage between training and test data, what condition normalisation and smoothing add to autoencoder and classical detectors; to separate the effect of the method from the effect of tuning; and to check whether the alarms point to the right part of the turbine. Its contributions are:
 \begin{itemize}
 \item a leakage-safe evaluation of condition normalisation and causal smoothing on all 95 CARE-to-Compare datasets, with settings fixed in advance, three seeds, three baselines, an ablation of every step and a paired bootstrap over datasets;
 \item \PH{v3: leave-one-farm-out tuning of threshold and alarm counter, and a conditional autoencoder}, which show how much of the gap to the tuned benchmark result comes from tuning;
@@ -73,7 +73,7 @@ An earlier version of this work had exactly those problems: it trained on a file
 \end{figure*}
 
 \section{Related Work}
-SCADA-based condition monitoring is reviewed in \cite{r20}. Early normal behaviour models predicted one temperature from a few operating inputs and flagged large residuals \cite{r21,r22,r23}; later work added change-point detection to keep such models robust after component swaps \cite{r24}. Inputs that are physically coupled to the target improve the fit but can hide the fault \cite{r26}, a point that returns in our results. Deep models extend the idea to many channels \cite{r2,r4,r25}, and autoencoders treat a large reconstruction error as a sign that the current row does not look like healthy training rows \cite{r10,r11}.
+SCADA-based condition monitoring is reviewed in \cite{r20}. Early normal behaviour models predicted one temperature from a few operating inputs and flagged large residuals \cite{r21,r22,r23}; later work added change-point detection to keep such models robust after component swaps \cite{r24}. Inputs that are physically coupled to the target improve the fit but can hide the fault \cite{r26}, a point that returns in our results. Deep models extend the idea to many channels \cite{r2,r4,r25}, and autoencoders treat a large reconstruction error as a sign that the current row does not look like healthy training rows \cite{r10,r11}. Recent work at this conference applied autoencoder features to fault classification in AC microgrids \cite{r31}, threshold-based anomaly flags to wind power prediction \cite{r30}, deep learning to appliance predictive maintenance \cite{r32}, and noise-robustness tests to line-fault classifiers \cite{r33}; we extend this line to a multi-farm benchmark with time-ordered splits and event-level scoring.
 
 The work closest to ours comes from the group that released CARE-to-Compare. ARCANA attributes an autoencoder anomaly to input features through a sparse correction of the input \cite{r17}; transfer learning lets a model trained on one turbine serve another \cite{r18}; and a conditional autoencoder worked well for district-heating substations \cite{r19}. The benchmark paper defines the CARE score and reports 0.66 for an autoencoder whose layer sizes, learning rate and thresholds were tuned per farm with Optuna, with an adaptive, error-predicting threshold on farms A and B, and 0.5 for random predictions \cite{r12}. Its earliness weighting follows the Numenta benchmark \cite{r27}. Our condition normalisation is a post-hoc relative of that adaptive threshold; the difference here is that nothing is tuned on the test data.
 
@@ -324,7 +324,7 @@ This paper & yes & yes & checked & est. & yes & play.\\
 \section{Conclusion}
 On all 95 CARE-to-Compare datasets, with settings fixed in advance, a dense autoencoder reaches a CARE score of 0.584, and condition normalisation and causal smoothing move it by less than the variation between datasets; PCA does as well. Normalisation lowers false alarms but also hides load-dependent fault signal, and it pays off only for weaker detectors such as Isolation Forest. \PH{One sentence on leave-one-farm-out tuning and the conditional AE.} Plant-area attribution beats a random ranking clearly but only matches always naming the commonest area. The cooling-valve fault was missed although the cooling area ranked first, and the time-to-threshold band remains a planning aid rather than a fitted life model. Next steps are fitting the gate to a real maintenance log and transferring the condition model between turbines \cite{r18}.
 
-\begin{thebibliography}{29}
+\begin{thebibliography}{33}
 \bibitem{r1} A. Tavares and M. Giesbrecht, ``Deep Learning-Based Fault Diagnosis in Wind Turbine Bearings and Gearboxes Using Vibration Signals,'' \textit{IEEE Access}, 2025, doi: 10.1109/ACCESS.2025.3636831.
 \bibitem{r2} Y. Lee, C. Park, N. Kim, J. Ahn, and J. Jeong, ``LSTM-Autoencoder Based Anomaly Detection Using Vibration Data of Wind Turbines,'' \textit{Sensors}, vol. 24, no. 9, Art. no. 2833, 2024.
 \bibitem{r3} L. Cummins \textit{et al.}, ``Explainable Predictive Maintenance: A Survey of Current Methods, Challenges and Opportunities,'' \textit{IEEE Access}, vol. 12, pp. 57574--57602, 2024.
@@ -354,6 +354,10 @@ On all 95 CARE-to-Compare datasets, with settings fixed in advance, a dense auto
 \bibitem{r27} A. Lavin and S. Ahmad, ``Evaluating real-time anomaly detection algorithms -- the Numenta Anomaly Benchmark,'' in \textit{Proc. IEEE 14th Int. Conf. Mach. Learn. Appl. (ICMLA)}, 2015, pp. 38--44, doi: 10.1109/ICMLA.2015.141.
 \bibitem{r28} S. Kapoor \textit{et al.}, ``REFORMS: Consensus-based recommendations for machine-learning-based science,'' \textit{Sci. Adv.}, vol. 10, no. 18, Art. no. eadk3452, 2024, doi: 10.1126/sciadv.adk3452.
 \bibitem{r29} R. R. Nair, T. Babu, A. Panthakkan, B. Balusamy, and W. Mansoor, ``Hybrid autoencoder-based framework for early fault detection in wind turbines,'' arXiv:2510.15010, 2025.
+\bibitem{r30} P. K. J. S., S. S., S. P. B., and V. M., ``Hybrid Machine Learning-Based Wind Power Prediction with Anomaly Detection,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--5, doi: 10.1109/AIEI69164.2026.11496741.
+\bibitem{r31} R. Pradhan, ``Deep Autoencoder Networks for Fault Detection in AC Microgrids,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--6, doi: 10.1109/AIEI69164.2026.11497941.
+\bibitem{r32} A. S. Kumar \textit{et al.}, ``Predictive Maintenance System for Smart Home Appliances Using IoT Sensor Data and Deep Learning,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--6, doi: 10.1109/AIEI69164.2026.11497140.
+\bibitem{r33} I. Ramesh, P. Jethi, M. K., K. R. Kalla, and S. S. Sahoo, ``Robust and Explainable Evaluation of Ensemble Learning Models for Line-to-Ground Fault Classification,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--6, doi: 10.1109/AIEI69164.2026.11496793.
 \end{thebibliography}
 
 \end{document}
