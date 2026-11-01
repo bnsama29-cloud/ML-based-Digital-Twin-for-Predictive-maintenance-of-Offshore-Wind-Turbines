@@ -1,0 +1,23 @@
+{
+  "event": 40,
+  "farm": "A",
+  "description": "Generator bearing failure",
+  "threshold": 0.6759629616210006,
+  "n_features": 72,
+  "detection": {
+    "event_id": 40,
+    "label": "anomaly",
+    "tp": 1253,
+    "fp": 249,
+    "fn": 3255,
+    "tn": 182,
+    "alarm_any": true,
+    "detected": true,
+    "roc_auc": 0.3123668260807803,
+    "pr_auc": 0.8623903651790295,
+    "first_alarm_h_rel_start": 45.166666666666664
+  },
+  "rca_rank_of_truth": {
+    "GENERATOR": 1
+  }
+}

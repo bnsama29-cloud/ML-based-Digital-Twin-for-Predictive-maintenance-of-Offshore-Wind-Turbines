@@ -1,44 +1,52 @@
-# Fault detection, attribution and maintenance timing on wind-turbine SCADA data
+# A leakage-safe autoencoder framework for early fault detection and subsystem attribution in wind turbines
 
-Code for the paper *Condition-normalised autoencoder scoring for fault detection,
-attribution and maintenance timing on wind turbine SCADA data* (RV College of Engineering).
+Code and results for the paper *A Leakage-Safe Autoencoder Framework for Early Fault
+Detection and Subsystem Attribution in Wind Turbines Using SCADA Data* (RV College of
+Engineering, Bengaluru).
 
-The study is a leakage-safe evaluation on **all 95 datasets of the
+The study evaluates fault detectors on **all 95 datasets of the
 [CARE-to-Compare](https://zenodo.org/records/15846963) benchmark** (3 farms, 45 faults,
-50 normal periods), scored with the benchmark's CARE score. It covers:
+50 normal periods) with time-ordered splits, settings fixed before testing, three seeds,
+and the benchmark's CARE score. It covers:
 
-- detectors: dense autoencoder, conditional autoencoder, Isolation Forest, PCA, 3σ fraction
+- detectors: dense autoencoder (AE), conditional AE, LSTM AE, AE with a sigmoid output,
+  PCA, Isolation Forest, 3σ fraction
 - post-processing: condition normalisation (remove the error that wind, power, rotor speed
-  and ambient temperature explain), causal smoothing, both, ablated one by one
+  and ambient temperature explain), causal smoothing, both — each ablated
+- leave-one-farm-out threshold tuning, a paired bootstrap over datasets, robustness to
+  noise and missing data, compute time
 - plant-area attribution checked against operator fault notes, with random, majority-class
-  and no-model floors
-- a causal health index with a time-to-threshold band, a gate sensitivity study, and a
-  Unity playback that only shows measured values and model outputs
+  and model-free floors
+- a causal health index with a time-to-threshold band, a work-order gate study, and a
+  Unity playback of measured values
 
-All settings were fixed before testing (see [`rework/KAGGLE.md`](rework/KAGGLE.md)).
+## Results (final run, v3)
 
-## Results so far (v2 run)
+| Detector | Post-processing | CARE, fixed settings | CARE, tuned leave-one-farm-out | Faults detected / 45 | Normal periods with alarm / 50 |
+|---|---|---|---|---|---|
+| AE | raw | 0.584 ± 0.002 | 0.607 | 11.3 | 5.0 |
+| AE | + normalisation + smoothing | 0.592 ± 0.004 | 0.602 | 15.3 | 7.0 |
+| Conditional AE | raw | 0.590 ± 0.007 | 0.603 | 11.7 | 3.7 |
+| LSTM AE | raw | 0.531 ± 0.000 | 0.601 | 5.0 | 3.0 |
+| AE, sigmoid output | raw | 0.498 | – | 6 | 10 |
+| PCA | + normalisation + smoothing | 0.598 | 0.611 | 16 | 9 |
+| Isolation Forest | raw → + both | 0.471 → 0.518 | 0.527 → 0.582 | 2.3 → 9.3 | 4.3 → 8.3 |
 
-| Detector | Post-processing | CARE (3 seeds) | Faults detected / 45 | Normal periods with alarm / 50 |
-|---|---|---|---|---|
-| Autoencoder | raw | 0.584 ± 0.002 | 11.3 | 5.0 |
-| Autoencoder | + smoothing | 0.595 ± 0.004 | 17.7 | 8.3 |
-| Autoencoder | + cond. norm. | 0.568 ± 0.003 | 10.3 | 4.0 |
-| Autoencoder | + both | 0.592 ± 0.004 | 15.3 | 7.0 |
-| PCA | + both | 0.598 | 16 | 9 |
-| Isolation Forest | raw → + both | 0.467 → 0.515 | 2 → 9 | 5 → 9 |
+Reference values from the benchmark paper: per-farm tuned AE 0.66, random 0.5.
 
-Reference values from the benchmark paper: tuned autoencoder 0.66, random 0.5.
+- A paired bootstrap over datasets finds no significant difference between the AE
+  post-processing variants, or between AE, conditional AE and PCA. The LSTM AE is lower
+  (−0.054, 95 % CI −0.092 to −0.019); the sigmoid output costs 0.086 (0.025 to 0.146).
+  Normalisation + smoothing helps Isolation Forest (+0.047, 0.003 to 0.091).
+- Tuning thresholds on two farms and testing on the third adds 0–0.07; even tuning on
+  the test data gives at most 0.619, so most of the gap to 0.66 is not threshold choice.
+- Attribution top-1: 0.37 (AE vote) vs 0.22 (raw z-scores), 0.12 (random), 0.30 (always the
+  commonest area).
+- Case studies: generator-bearing fault (dataset 40) detected ~29 days before the end of
+  its window with the generator ranked first; cooling-valve fault (dataset 44) missed,
+  cooling still ranked first.
 
-A paired bootstrap over datasets finds no significant difference between the autoencoder
-variants or between the autoencoder and PCA. The only significant gain is condition
-normalisation plus smoothing on Isolation Forest: +0.048, 95 % CI [0.003, 0.094].
-Attribution top-1 is 0.36, against 0.12 for a random ranking and 0.30 for always naming
-the commonest area.
-
-Tables are in [`rework/results/v2/`](rework/results/v2). The v3 run adds the conditional AE,
-leave-one-farm-out threshold tuning, robustness on all datasets, a sigmoid-head ablation
-and a second case study.
+All tables: [`rework/results/v3/`](rework/results/v3) (v2 kept for reference).
 
 ## Layout
 
@@ -50,8 +58,8 @@ rework/            the study (use this)
   merge_results.py   stored scores -> paper tables
   run_all.py         everything in one go, ends with a zip
   tests/             pytest suite
-  paper/main.tex     IEEE conference paper
-  results/v2/        tables of the v2 run
+  paper/main.tex     IEEE conference paper (make_figures.py draws Fig. 1 and 2)
+  results/v3/        tables of the final run (results/v2: earlier run)
 src/, dashboard.py   first prototype (kept for history; not used by the paper)
 ```
 
@@ -67,7 +75,9 @@ cd rework
 pip install -r requirements.txt
 python -m pytest -q tests
 python run_all.py --data-dir data --out out --zip out/results_v3.zip --events 7 21 40 --epochs 2   # smoke test
-python run_all.py --data-dir data --out out --zip out/results_v3.zip                               # full run
+python run_all.py --data-dir data --out out --zip out/results_v3.zip                               # run A
+python run_all.py --detectors lstm --data-dir data --out out_b --zip out/results_v3_lstm.zip       # run B
+python merge_results.py --inputs out/benchmark out_b/benchmark --out tables                      # merge
 ```
 
 ## Data and licence of the data

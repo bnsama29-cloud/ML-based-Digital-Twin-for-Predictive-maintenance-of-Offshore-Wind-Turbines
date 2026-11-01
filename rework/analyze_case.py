@@ -13,6 +13,7 @@ import os
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -200,6 +201,9 @@ def main():
     def shade(ax):
         ax.axvspan(start, end, color="tab:red", alpha=0.12, label="labelled event")
         ax.axvline(ts[pm].iloc[0], color="k", ls=":", lw=1, label="prediction starts")
+        loc = mdates.AutoDateLocator(maxticks=6)
+        ax.xaxis.set_major_locator(loc)
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc))
 
     fig, ax = plt.subplots(figsize=(7, 2.6))
     ax.plot(ts, hi, lw=0.8, label="health index")

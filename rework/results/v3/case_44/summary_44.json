@@ -1,0 +1,27 @@
+{
+  "event": 44,
+  "farm": "C",
+  "description": "Valve in water cooling system was left in wrong position after maintenance actions on 05-08-2020",
+  "threshold": 2.2440476458439784,
+  "n_features": 881,
+  "detection": {
+    "event_id": 44,
+    "label": "anomaly",
+    "tp": 20,
+    "fp": 37,
+    "fn": 8768,
+    "tn": 633,
+    "alarm_any": false,
+    "detected": false,
+    "roc_auc": 0.6722504059130836,
+    "pr_auc": 0.9466256825971864,
+    "first_alarm_h_rel_start": NaN
+  },
+  "rca_rank_of_truth": {
+    "COOLING": 1
+  },
+  "rotor_bearing_temp_residual_mean_val": -1.2439648028282737,
+  "rotor_bearing_temp_residual_mean_event": 0.13698525007155712,
+  "cooling_water_outlet_residual_mean_val": -0.640737340542423,
+  "cooling_water_outlet_residual_mean_event": -0.003113381410035915
+}
