@@ -47,7 +47,7 @@ veenagadad@rvce.edu.in}
 \maketitle
 
 \begin{abstract}
-Autoencoders trained on normal operation are widely used to flag faults in wind turbine SCADA data, but their reconstruction error also follows wind and load. A common remedy is to model the part of the error that operating conditions explain and to score only the excess. This paper tests that remedy, together with causal smoothing, on all 95 datasets of the CARE-to-Compare benchmark (three farms, 45 faults, 50 normal periods). Training and test data are split in time, all settings are fixed before testing, and a dense autoencoder, a conditional autoencoder and an LSTM autoencoder are compared with PCA, Isolation Forest and a 3$\sigma$ rule over three seeds, using the benchmark's CARE score and a paired bootstrap over datasets. With fixed settings the dense autoencoder scores 0.584, and normalisation plus smoothing gives 0.592, against 0.5 for random predictions; PCA (0.598) and the conditional autoencoder (0.590) are statistically level with it, the LSTM autoencoder is lower (0.531), and a sigmoid output layer costs 0.086. Normalisation lowers false alarms but also hides load-dependent fault signal; it helps weak detectors most (Isolation Forest +0.047). Thresholds tuned on two farms and tested on the third raise every detector to 0.58--0.61, below the 0.66 of a per-farm tuned autoencoder. Plant-area attribution names the operator's root cause first in 37\% of 40 labelled faults, against 12\% for a random ranking and 22\% for raw z-scores. A causal health index then gives a work-order trigger with a time-to-threshold band on a generator-bearing fault.
+Autoencoders trained on normal operation are widely used to flag faults in wind turbine SCADA data, but their reconstruction error also follows wind and load. This paper tests a common remedy, scoring only the error that operating conditions do not explain, together with causal smoothing, on all 95 datasets of the CARE-to-Compare benchmark (three farms, 45 faults, 50 normal periods). Splits are ordered in time, all settings are fixed before testing, and six detectors are compared over three seeds with the benchmark's CARE score and a paired bootstrap over datasets. The dense autoencoder scores 0.584 and 0.592 with normalisation and smoothing, against 0.5 for random predictions; PCA and a conditional autoencoder are statistically level with it, an LSTM autoencoder is lower (0.531) and a sigmoid output costs 0.086. Normalisation cuts false alarms but hides load-dependent fault signal, and helps weak detectors most (Isolation Forest +0.047). Thresholds tuned on two farms and tested on the third lift every detector to 0.58--0.61, below the 0.66 of a per-farm tuned autoencoder. Plant-area attribution names the operator's root cause first in 37\% of 40 faults, against 12\% for random and 22\% for raw z-scores, and a causal health index gives a work-order trigger with a time-to-threshold band on a generator-bearing fault.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -117,17 +117,33 @@ All & & & 45 & 50\\
 \end{tabular}
 \end{table}
 
-All rules were fixed before any test result was seen. Models are fitted only on normal-status training rows; rows with wind between 5 and 20~m/s but power below 2\% of its training 99th percentile are dropped, since a turbine standing still in good wind is not healthy behaviour \cite{r12}. The last 15\% of the remaining rows are held out and split in time into calibration slices $\mathcal{C}_a$ and $\mathcal{C}_b$. Identifiers and the status code are removed from the inputs, as are angle, counter, constant and mostly-missing channels. Gaps up to one hour are forward-filled, the rest take the training median, and channels are standardised on training rows and clipped to $\pm10$.
+All rules were fixed before any test result was seen. Leakage, information from the test period reaching the model, is the main reason SCADA results fail to transfer: a random split puts rows from days before a fault into training, so the model learns the fault as normal and the test rows next to them become easy to predict \cite{r28}. Here every statistic is fitted on the training year only and the prediction window is never seen before scoring. Models use only normal-status training rows; rows with wind between 5 and 20~m/s but power below 2\% of its training 99th percentile are also dropped, since a turbine standing still in good wind is curtailed or stopped, not healthy \cite{r12}. The last 15\% of the remaining rows are held out and split in time into two calibration slices, $\mathcal{C}_a$ for the condition model and $\mathcal{C}_b$ for the threshold, so neither is fitted on rows used to set the other. Identifiers and the status code are removed from the inputs, as are angle, counter, constant and mostly-missing channels. Gaps up to one hour are forward-filled, the rest take the training median, and channels are standardised on training rows and clipped to $\pm10$.
 
 \section{Method}
 \subsection{Detectors}
 The main detector is a dense autoencoder (AE), $d\!\to\!256\!\to\!64\!\to\!16\!\to\!64\!\to\!256\!\to\!d$ with ReLU and a linear output, trained with Adam ($10^{-3}$), batch 256, at most 40 epochs and early stopping after five epochs without improvement. Its score is the mean squared reconstruction error $e(t)=\tfrac{1}{d}\lVert \mathbf{x}(t)-\hat{\mathbf{x}}(t)\rVert_2^2$. Three variants test specific choices: the same AE with a sigmoid output, which cannot reproduce negative standardised values; a conditional AE (CAE) that receives the four scaled operating conditions at its input and next to its code \cite{r19}; and an LSTM AE that encodes the last six rows (1~h) and scores row $t$ by the error of the window ending at $t$, so it never looks ahead. Baselines are Isolation Forest (IF, 200 trees) \cite{r16}, PCA keeping 95\% of variance, and the fraction of channels beyond 3$\sigma$. AE, CAE, LSTM AE and IF use seeds 0, 1 and 2.
 
 \subsection{Condition normalisation and smoothing}
-Let $\mathbf{u}(t)$ hold wind speed, active power, rotor speed and ambient temperature. A histogram gradient-boosting regressor $g$ (200 trees, rate 0.05) is fitted on $\mathcal{C}_a$, which no detector trained on, to predict $\log e$ from $\mathbf{u}$, and the normalised score is $r(t)=\log e(t)-g(\mathbf{u}(t))$, the part of the error the operating point does not explain. A causal 6-hour rolling median then removes isolated spikes. Every detector is reported raw, smoothed, normalised, and both.
+A healthy turbine's reconstruction error is not constant: at rated power, gusts, cut-in and cut-out the sensors move into regions that are rare in training, and the error rises although nothing is wrong. A single threshold then fires in rough weather and stays silent in calm weather. Let $\mathbf{u}(t)$ hold wind speed, active power, rotor speed and ambient temperature. A histogram gradient-boosting regressor $g$ (200 trees, rate 0.05) is fitted on $\mathcal{C}_a$, whose rows no detector was trained on (they serve only for early stopping), to predict the typical healthy error at each operating point:
+\begin{equation}
+r(t)=\log e(t)-g\big(\mathbf{u}(t)\big).
+\end{equation}
+$r(t)$ is the part of the error that the operating point does not explain; the logarithm turns the ratio of observed to expected error into a difference and tames its long right tail. Because the same error is now judged against an operating-point-specific expectation, the method acts like an adaptive threshold \cite{r12}. A causal 6-hour rolling median then removes isolated spikes, using only the current and past rows. Every detector is reported raw, smoothed, normalised, and with both steps, so the effect of each step can be read off directly.
 
 \subsection{Thresholds, alarms and evaluation}
-A row is flagged when its score exceeds the 99th percentile of the same score on $\mathcal{C}_b$. The benchmark's counter \cite{r12} rises on flagged normal-status rows and falls on clean ones; an alarm is raised at 72 (12~h). The CARE score \cite{r12} combines coverage (row-wise $F_{0.5}$ in fault windows), accuracy (unflagged share of normal datasets), reliability (event-wise $F_{0.5}$ over all datasets) and earliness \cite{r27} as $(\mathrm{Cov}+\mathrm{Earl}+\mathrm{Rel}+2\,\mathrm{Acc})/5$. Differences between two configurations are tested with a paired bootstrap that resamples fault and normal datasets separately (1000 draws). To measure what tuning is worth without touching the test farm, the quantile $q\in\{0.95,\dots,0.999\}$ and counter $k\in\{36,72,144\}$ are chosen on two farms and applied to the third, for each farm in turn (leave-one-farm-out, LOFO). Algorithm~\ref{alg:pipeline} summarises the scoring of one dataset.
+A row is flagged when its score exceeds $\tau$, the 99th percentile of the same score on $\mathcal{C}_b$, i.e.\ about 1\% of healthy held-out rows would be flagged. Single flagged rows are common, so alarms use the benchmark's criticality counter \cite{r12}:
+\begin{equation}
+c(t)=\begin{cases} c(t-1)+1 & \text{flagged, normal status}\\ \max\big(c(t-1)-1,0\big) & \text{not flagged, normal status}\\ c(t-1) & \text{abnormal status,}\end{cases}
+\end{equation}
+and an alarm is raised when $c(t)\ge72$, i.e.\ after 12~h of net abnormal behaviour. The counter forgives short bursts but accumulates persistent drift.
+
+The CARE score \cite{r12} rewards four things a maintenance team cares about. Coverage is the row-wise $F_{0.5}$ inside fault windows (how much of each fault is flagged); accuracy is the share of rows left unflagged in normal datasets (how quiet the detector is when nothing is wrong); reliability is the event-wise $F_{0.5}$ over all 95 datasets, counting a dataset as alarmed if $c$ ever reaches 72; and earliness weights flagged rows by their position, with weight one in the first quarter of the window falling linearly to zero at the fault \cite{r27}. They are combined as
+\begin{equation}
+\mathrm{CARE}=\tfrac{1}{5}\big(\mathrm{Cov}+\mathrm{Earl}+\mathrm{Rel}+2\,\mathrm{Acc}\big),
+\end{equation}
+where accuracy counts twice so that the 50 normal periods weigh as much as the 45 faults. The score is 0 if nothing is detected and equals the accuracy if that falls to 0.5 or below; $F_{0.5}$ favours precision, so false alarms cost more than misses. Because the 95 datasets, not the seeds, are the main source of variation, two configurations are compared with a paired bootstrap: fault and normal datasets are resampled separately 1000 times, both CARE scores are recomputed on each draw, and the 2.5th and 97.5th percentiles of their difference give a 95\% interval.
+
+The benchmark's 0.66 came from per-farm tuning \cite{r12}. To see how much tuning is worth without touching the test data, the quantile $q\in\{0.95,0.975,0.99,0.995,0.999\}$ and counter $k\in\{36,72,144\}$ are chosen by the seed-averaged CARE score on two farms and then applied unchanged to the third; repeating this for each farm gives a leave-one-farm-out (LOFO) score for all 95 datasets. Algorithm~\ref{alg:pipeline} summarises the scoring of one dataset.
 
 \begin{algorithm}[t]
 \caption{Leakage-safe scoring of one turbine dataset}
@@ -150,9 +166,17 @@ A row is flagged when its score exceeds the 99th percentile of the same score on
 \end{algorithm}
 
 \subsection{Attribution, health index and robustness}
-Each channel is assigned to one of ten plant areas by ordered keyword rules on its published description. Over the labelled window, each channel's error is divided by its mean error on held-out rows, and areas are ranked by the mean ratio, the summed ratio, or a vote of the ten highest-ratio channels. The authors mapped each operator note to one or more areas; five vague notes were left out, leaving 40 faults. Floors are a random ranking, always naming the commonest area (an oracle, since it sees the labels), and the mean-ratio rule on absolute z-scores, which needs no model.
+An alarm is more useful when it says where to look. Each channel is assigned to one of ten plant areas (pitch and hub, yaw, hydraulics and brakes, cooling, gearbox, generator, rotor and drive train, nacelle and tower, electrical, environment) by ordered keyword rules on its published description. For channel $j$ the error ratio
+\begin{equation}
+\rho_j=\frac{\overline{\varepsilon_j}\ \text{over the fault window}}{\overline{\varepsilon_j}\ \text{over held-out healthy rows}}
+\end{equation}
+measures how much worse the AE reconstructs it during the fault than when healthy, with $\varepsilon_j$ the squared error of channel $j$; dividing by the healthy level stops channels that are always hard to reconstruct from dominating. Areas are ranked by the mean ratio of their channels, by the summed ratio (which favours large areas), or by how many of the ten highest-ratio channels they own. The authors mapped each operator note to one or more areas; five vague notes were left out, leaving 40 faults. Floors are a random ranking, always naming the commonest area (an oracle, since it sees the labels), and the mean-ratio rule on absolute z-scores, which needs no model.
 
-For case studies the normalised, smoothed score $\tilde r$ is mapped to a health index $\mathrm{HI}=(1+\max(0,\tilde r-q_{50})/(q_{99}-q_{50}))^{-1}$ with quantiles from $\mathcal{C}_b$, so HI is 1 when healthy and 0.5 at the threshold. A least-squares slope over the previous 24~h gives the time to $\mathrm{HI}=0.2$ with a 95\% band from the slope's standard error. A work order is raised when an alarm is active and this time falls below a gate $G\in\{72,168,336\}$~h. To probe sensor faults, every prediction window is corrupted with Gaussian noise ($\sigma=0.1$--$0.5$) or 5--20\% of entries set to the training median, and rescored without retraining or moving the threshold.
+For maintenance planning the normalised, smoothed score is mapped to a health index
+\begin{equation}
+\mathrm{HI}(t)=\Big(1+\frac{\max(0,\tilde r(t)-q_{50})}{q_{99}-q_{50}}\Big)^{-1},
+\end{equation}
+with $q_{50}$ and $q_{99}$ the median and 99th percentile of $\tilde r$ on $\mathcal{C}_b$: HI is 1 for typical healthy behaviour, 0.5 exactly at the alarm threshold and falls towards 0 beyond it. A least-squares line through the last 24~h of HI gives a slope $s$; if $s<0$, the time to a floor of 0.2 is $(\mathrm{HI}-0.2)/(-s)$, capped at 720~h, and $s\pm1.96\,\mathrm{SE}(s)$ gives a 95\% band. A work order is suggested when an alarm is active and this time falls below a gate $G\in\{72,168,336\}$~h. With no replacement dates in the data, $G$ cannot be fitted, so all three are reported. To probe sensor faults, every prediction window is corrupted with Gaussian noise ($\sigma=0.1$--$0.5$) or 5--20\% of entries set to the training median, and rescored without retraining or moving the threshold.
 
 \section{Results}
 \subsection{Detection on 95 datasets}
@@ -209,7 +233,7 @@ Isolation Forest & 0.578 & 0.522 & 0.490 & 0.53 & 0.21 & 0.30 & 0.83\\
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/fig_care.png}
+\includegraphics[width=0.9\columnwidth]{figures/fig_care.png}
 \caption{CARE score of the full pipeline (normalisation + smoothing) with the fixed threshold and with thresholds tuned leave-one-farm-out; error bars: s.d.\ over seeds.}
 \label{fig:care}
 \end{figure}
@@ -239,96 +263,71 @@ Most common area (oracle) & 0.30 & 0.70\\
 \end{table}
 
 \subsection{Case studies}
-Dataset 40 (farm A) ends in a generator-bearing failure. The full pipeline raised its first alarm about 45~h after the start of the 31-day fault window and kept alarming through it (Fig.~\ref{fig:hi}); generator was the top-ranked area (mean error ratio 13.1, ahead of gearbox at 12.9; Fig.~\ref{fig:rca}). At every gate the first work order fell on that first alarm, about 29 days before the window ended, with no trigger in $\mathcal{C}_b$ or before the event (Fig.~\ref{fig:ttt}). The score was also high on many rows just before the window and on two short episodes in the training year, so some alarms would have reached the operator earlier without a confirmed fault. Dataset 44 (farm C, a cooling-water valve left in the wrong position after maintenance) was missed: only 20 of 8788 window rows crossed the threshold, although the cooling area still ranked first of ten. A gradient-boosting model of cooling-water outlet temperature (MAE 1.4~$^\circ$C, $R^2=0.31$ on later rows) shows a residual shift of only 0.6~$^\circ$C during the fault, well inside its error, consistent with the miss.
+Dataset 40 (farm A) ends in a generator-bearing failure. The full pipeline raised its first alarm about 45~h after the start of the 31-day fault window and kept alarming through it (Fig.~\ref{fig:hi}); generator was the top-ranked area (mean error ratio 13.1, ahead of gearbox at 12.9). At every gate the first work order fell on that first alarm, about 29 days before the window ended, with no trigger in $\mathcal{C}_b$ or before the event (Fig.~\ref{fig:ttt}). The score was also high on many rows just before the window and on two short episodes in the training year, so some alarms would have reached the operator earlier without a confirmed fault. Dataset 44 (farm C, a cooling-water valve left in the wrong position after maintenance) was missed: only 20 of 8788 window rows crossed the threshold, although the cooling area still ranked first of ten. A gradient-boosting model of cooling-water outlet temperature (MAE 1.4~$^\circ$C, $R^2=0.31$ on later rows) shows a residual shift of only 0.6~$^\circ$C during the fault, well inside its error, consistent with the miss.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/fig_hi_40.png}
+\includegraphics[width=0.9\columnwidth]{figures/fig_hi_40.png}
 \caption{Health index for dataset 40 (generator bearing) with alarms and the labelled fault window (shaded).}
 \label{fig:hi}
 \end{figure}
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.78\columnwidth]{figures/fig_rca_40.png}
-\caption{Plant-area attribution over the fault window of dataset 40: mean ratio of channel error to its healthy level. The operator's root cause is the generator.}
-\label{fig:rca}
-\end{figure}
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/fig_ttt_40.png}
+\includegraphics[width=0.9\columnwidth]{figures/fig_ttt_40.png}
 \caption{Time to $\mathrm{HI}=0.2$ in the prediction window of dataset 40 with a 95\% band from the slope standard error; dashed: 168~h gate.}
 \label{fig:ttt}
 \end{figure}
 
 \subsection{Robustness and compute cost}
-Corrupting the prediction window without moving the threshold mainly raises false alarms (Fig.~\ref{fig:robust}): for the full AE pipeline, alarms in normal periods grow from 6 to 13, 25 and 30 of 50 at noise $\sigma=0.1$, 0.3 and 0.5, and to 19 and 27 with 5\% and 20\% missing entries, while accuracy falls from 0.95 to 0.52. The CARE score barely moves (0.546--0.611) because extra detections in fault windows offset the false alarms, which shows that the score alone can hide a sensor problem. The threshold must therefore be recalibrated when sensor quality changes. Table~\ref{tab:time} lists median compute times on a Kaggle T4 GPU: every detector fits in under 25~s per turbine-year and scores 1000 rows in at most 10~ms, so all are cheap enough for a 10-minute SCADA stream. The playback scene in Unity reads a CSV of measured wind speed, rotor speed, power and temperatures with the score, alarm, HI and time-to-threshold band; it is a briefing view, not a closed-loop twin.
+Corrupting the prediction window without moving the threshold mainly raises false alarms (Fig.~\ref{fig:robust}): for the full AE pipeline, alarms in normal periods grow from 6 to 13, 25 and 30 of 50 at noise $\sigma=0.1$, 0.3 and 0.5, and to 19 and 27 with 5\% and 20\% missing entries, while accuracy falls from 0.95 to 0.52. The CARE score barely moves (0.546--0.611) because extra detections in fault windows offset the false alarms, which shows that the score alone can hide a sensor problem. The threshold must therefore be recalibrated when sensor quality changes. On a Kaggle T4 GPU the median fit time per farm-C turbine-year was 8.0~s for the AE, 21.9~s for the LSTM AE, 2.8~s for PCA and 0.7~s for IF, and scoring 1000 rows took at most 10~ms, so every detector is cheap enough for a 10-minute SCADA stream on a single edge computer. A Unity scene replays measured values with the score, alarm, HI and time-to-threshold band as a briefing view.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\columnwidth]{figures/fig_robust.png}
+\includegraphics[width=0.9\columnwidth]{figures/fig_robust.png}
 \caption{Effect of corrupting the prediction window (Gaussian noise $\sigma$ or missing entries) on the full pipeline with a fixed threshold, AE seed 0 and PCA.}
 \label{fig:robust}
 \end{figure}
 
-\begin{table}[t]
-\caption{Median compute time per dataset (Kaggle T4 GPU, farm C)}
-\label{tab:time}
-\centering
-\begin{tabular}{lcc}
-\toprule
-Detector & Fit (s) & Score (ms / 1000 rows)\\
-\midrule
-AE & 8.0 & 5\\
-LSTM AE & 21.9 & --\\
-PCA & 2.8 & 6\\
-Isolation Forest & 0.7 & 10\\
-3$\sigma$ fraction & 0 & 2\\
-\bottomrule
-\end{tabular}
-\end{table}
 
-\section{Discussion and Limits}
-\textit{Why normalisation did not help the autoencoder.} The regressor removes whatever the operating point predicts, and on these turbines part of the fault signal is itself load-dependent. Normalisation trades coverage for accuracy, and the CARE score, which weights accuracy twice, ends up where it started; detectors whose error is dominated by the operating point, such as IF, gain the most. \textit{What the data cannot show.} Ten-minute averages smooth away short electrical and communication faults, so no detector change recovers them. \textit{Life figure.} The time to threshold is a short-horizon slope to a chosen floor; the benchmark publishes no replacement times, so no remaining-useful-life error can be computed. \textit{Labels.} Plant areas were assigned to brief operator notes by the authors, and several faults involve more than one area. \textit{Scope.} One architecture per family was tested with fixed hyperparameters; per-farm architecture tuning is left open.
+
+\section{Limitations}
+\textit{What the data cannot show.} Ten-minute averages smooth away short electrical and communication faults, so no detector change recovers them. \textit{Life figure.} The time to threshold is a short-horizon slope to a chosen floor; the benchmark publishes no replacement times, so no remaining-useful-life error can be computed. \textit{Labels.} Plant areas were assigned to brief operator notes by the authors, and several faults involve more than one area. \textit{Scope.} One architecture per family was tested with fixed hyperparameters; per-farm architecture tuning is left open.
 
 \section{Conclusion}
 On all 95 CARE-to-Compare datasets, with time-ordered splits and settings fixed in advance, a dense autoencoder reaches a CARE score of 0.584. Condition normalisation and smoothing move it by less than the variation between datasets, PCA and a conditional autoencoder do as well, an LSTM autoencoder does worse, and a sigmoid output does markedly worse. Normalisation lowers false alarms but hides load-dependent fault signal, and pays off for weak detectors such as Isolation Forest. Thresholds tuned leave-one-farm-out raise every detector to about 0.60, which explains only part of the gap to a per-farm tuned result. Attribution beats a random ranking and a model-free ranking but only matches the commonest-area prior. Next steps are per-farm architecture search under the same leakage rules, fitting the work-order gate to a maintenance log, and transferring the condition model between turbines \cite{r18}.
 
-\begin{thebibliography}{33}
-\bibitem{r1} A. Tavares and M. Giesbrecht, ``Deep Learning-Based Fault Diagnosis in Wind Turbine Bearings and Gearboxes Using Vibration Signals,'' \textit{IEEE Access}, vol. 13, pp. 207013--207032, 2025, doi: 10.1109/ACCESS.2025.3636831.
-\bibitem{r2} Y. Lee, C. Park, N. Kim, J. Ahn, and J. Jeong, ``LSTM-Autoencoder Based Anomaly Detection Using Vibration Data of Wind Turbines,'' \textit{Sensors}, vol. 24, no. 9, Art. no. 2833, 2024.
-\bibitem{r3} L. Cummins \textit{et al.}, ``Explainable Predictive Maintenance: A Survey of Current Methods, Challenges and Opportunities,'' \textit{IEEE Access}, vol. 12, pp. 57574--57602, 2024.
-\bibitem{r4} Y. Wang, Y. Zhao, and S. Addepalli, ``Remaining Useful Life Prediction using Deep Learning Approaches: A Review,'' \textit{Procedia Manuf.}, vol. 49, pp. 81--88, 2020, doi: 10.1016/j.promfg.2020.06.015.
+\begin{thebibliography}{29}
 \bibitem{r5} M. Achouch \textit{et al.}, ``On Predictive Maintenance in Industry 4.0: Overview, Models, and Challenges,'' \textit{Appl. Sci.}, vol. 12, no. 16, p. 8081, 2022.
-\bibitem{r6} A. Haghshenas, ``Predictive Digital Twin of Wind Farm,'' M.S. thesis, NTNU, 2022.
-\bibitem{r7} F. Stadtmann \textit{et al.}, ``Digital Twins in Wind Energy: Emerging Technologies and Industry-Informed Future Directions,'' \textit{IEEE Access}, vol. 11, pp. 110762--110795, 2023.
 \bibitem{r8} E. Kandemir, A. Hasan, T. Kvamsdal, and S. A. Alaliyat, ``Predictive digital twin for wind energy systems: A literature review,'' \textit{Energy Informat.}, vol. 7, Art. no. 68, 2024.
-\bibitem{r9} C. Tsallis, P. Papageorgas, D. Piromalis, and R. A. Munteanu, ``Application-Wise Review of Machine Learning-Based Predictive Maintenance,'' \textit{Appl. Sci.}, vol. 15, no. 9, p. 4898, 2025.
-\bibitem{r10} A. Gonz\'alez-Mu\~niz, I. D\'iaz, A. A. Cuadrado, and D. Garc\'ia-P\'erez, ``Health indicator for machine condition monitoring built in the latent space of a deep autoencoder,'' \textit{Reliab. Eng. Syst. Saf.}, vol. 224, p. 108482, 2022.
-\bibitem{r11} A. Encalada-D\'avila, C. Tutiv\'en, B. Puruncajas, and Y. Vidal, ``Wind turbine multi-fault detection based on SCADA data via an AutoEncoder,'' \textit{Renew. Energy Power Qual. J.}, vol. 19, pp. 487--492, 2021.
-\bibitem{r12} C. G\"uck, C. M. A. Roelofs, and S. Faulstich, ``CARE to Compare: A Real-World Benchmark Dataset for Early Fault Detection in Wind Turbine Data,'' \textit{Data}, vol. 9, no. 12, p. 138, 2024.
-\bibitem{r13} F. Stadtmann and A. Rasheed, ``Diagnostic Digital Twin for Anomaly Detection in Floating Offshore Wind Energy,'' arXiv:2406.02775, 2024.
-\bibitem{r14} R. Pacheco-Blazquez, J. Garcia-Espinosa, D. Di Capua, and A. Pastor Sanchez, ``A Digital Twin for Assessing the Remaining Useful Life of Offshore Wind Turbine Structures,'' \textit{J. Mar. Sci. Eng.}, vol. 12, no. 4, Art. no. 573, 2024.
-\bibitem{r15} A. Pastor-Sanchez \textit{et al.}, ``Real-Time Digital Twin for Structural Health Monitoring of Floating Offshore Wind Turbines,'' \textit{J. Mar. Sci. Eng.}, vol. 13, no. 10, Art. no. 1953, 2025.
-\bibitem{r16} F. T. Liu, K. M. Ting, and Z.-H. Zhou, ``Isolation Forest,'' in \textit{Proc. IEEE Int. Conf. Data Mining (ICDM)}, 2008, pp. 413--422.
-\bibitem{r17} C. M. A. Roelofs, M.-A. Lutz, S. Faulstich, and S. Vogt, ``Autoencoder-based anomaly root cause analysis for wind turbines,'' \textit{Energy and AI}, vol. 4, Art. no. 100065, 2021, doi: 10.1016/j.egyai.2021.100065.
-\bibitem{r18} C. M. A. Roelofs, C. G\"uck, and S. Faulstich, ``Transfer learning applications for autoencoder-based anomaly detection in wind turbines,'' \textit{Energy and AI}, vol. 17, Art. no. 100373, 2024, doi: 10.1016/j.egyai.2024.100373.
-\bibitem{r19} C. M. A. Roelofs, E. Guevara Bastidas, T. Hugo, S. Faulstich, and A. Cadenbach, ``Enabling predictive maintenance in district heating substations: A labelled dataset and fault detection evaluation framework based on service data,'' \textit{Energy}, vol. 355, Art. no. 141178, 2026, doi: 10.1016/j.energy.2026.141178.
+\bibitem{r3} L. Cummins \textit{et al.}, ``Explainable Predictive Maintenance: A Survey of Current Methods, Challenges and Opportunities,'' \textit{IEEE Access}, vol. 12, pp. 57574--57602, 2024.
 \bibitem{r20} J. Tautz-Weinert and S. J. Watson, ``Using SCADA data for wind turbine condition monitoring -- a review,'' \textit{IET Renew. Power Gener.}, vol. 11, no. 4, pp. 382--394, 2017, doi: 10.1049/iet-rpg.2016.0248.
 \bibitem{r21} A. Zaher, S. D. J. McArthur, D. G. Infield, and Y. Patel, ``Online wind turbine fault detection through automated SCADA data analysis,'' \textit{Wind Energy}, vol. 12, no. 6, pp. 574--593, 2009, doi: 10.1002/we.319.
 \bibitem{r22} M. Schlechtingen and I. F. Santos, ``Wind turbine condition monitoring based on SCADA data using normal behavior models. Part 2: Application examples,'' \textit{Appl. Soft Comput.}, vol. 14, pp. 447--460, 2014, doi: 10.1016/j.asoc.2013.09.016.
 \bibitem{r23} P. Bangalore and L. B. Tjernberg, ``An artificial neural network approach for early fault detection of gearbox bearings,'' \textit{IEEE Trans. Smart Grid}, vol. 6, no. 2, pp. 980--987, 2015, doi: 10.1109/TSG.2014.2386305.
-\bibitem{r24} S. Letzgus, ``Change-point detection in wind turbine SCADA data for robust condition monitoring with normal behaviour models,'' \textit{Wind Energy Sci.}, vol. 5, pp. 1375--1397, 2020, doi: 10.5194/wes-5-1375-2020.
+\bibitem{r10} A. Gonz\'alez-Mu\~niz, I. D\'iaz, A. A. Cuadrado, and D. Garc\'ia-P\'erez, ``Health indicator for machine condition monitoring built in the latent space of a deep autoencoder,'' \textit{Reliab. Eng. Syst. Saf.}, vol. 224, p. 108482, 2022.
+\bibitem{r11} A. Encalada-D\'avila, C. Tutiv\'en, B. Puruncajas, and Y. Vidal, ``Wind turbine multi-fault detection based on SCADA data via an AutoEncoder,'' \textit{Renew. Energy Power Qual. J.}, vol. 19, pp. 487--492, 2021.
 \bibitem{r25} G. Helbing and M. Ritter, ``Deep learning for fault detection in wind turbines,'' \textit{Renew. Sustain. Energy Rev.}, vol. 98, pp. 189--198, 2018, doi: 10.1016/j.rser.2018.09.012.
-\bibitem{r26} T. Felgueira, S. Rodrigues, C. S. Perone, and R. Castro, ``The impact of feature causality on normal behaviour models for SCADA-based wind turbine fault detection,'' arXiv:1906.12329, 2019.
-\bibitem{r27} A. Lavin and S. Ahmad, ``Evaluating real-time anomaly detection algorithms -- the Numenta Anomaly Benchmark,'' in \textit{Proc. IEEE 14th Int. Conf. Mach. Learn. Appl. (ICMLA)}, 2015, pp. 38--44, doi: 10.1109/ICMLA.2015.141.
+\bibitem{r12} C. G\"uck, C. M. A. Roelofs, and S. Faulstich, ``CARE to Compare: A Real-World Benchmark Dataset for Early Fault Detection in Wind Turbine Data,'' \textit{Data}, vol. 9, no. 12, p. 138, 2024.
+\bibitem{r19} C. M. A. Roelofs, E. Guevara Bastidas, T. Hugo, S. Faulstich, and A. Cadenbach, ``Enabling predictive maintenance in district heating substations: A labelled dataset and fault detection evaluation framework based on service data,'' \textit{Energy}, vol. 355, Art. no. 141178, 2026, doi: 10.1016/j.energy.2026.141178.
 \bibitem{r28} S. Kapoor \textit{et al.}, ``REFORMS: Consensus-based recommendations for machine-learning-based science,'' \textit{Sci. Adv.}, vol. 10, no. 18, Art. no. eadk3452, 2024, doi: 10.1126/sciadv.adk3452.
 \bibitem{r29} R. R. Nair, T. Babu, A. Panthakkan, B. Balusamy, M. Saleh, and W. Mansoor, ``Hybrid Autoencoder-Based Framework for Early Fault Detection in Wind Turbines,'' in \textit{Proc. IEEE PES ISGT Middle East}, 2025, pp. 1--5, doi: 10.1109/ISGTMiddleEast65737.2025.11314324.
-\bibitem{r30} P. K. J. S., S. S., S. P. B., and V. M., ``Hybrid Machine Learning-Based Wind Power Prediction with Anomaly Detection,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--5, doi: 10.1109/AIEI69164.2026.11496741.
+\bibitem{r24} S. Letzgus, ``Change-point detection in wind turbine SCADA data for robust condition monitoring with normal behaviour models,'' \textit{Wind Energy Sci.}, vol. 5, pp. 1375--1397, 2020, doi: 10.5194/wes-5-1375-2020.
+\bibitem{r26} T. Felgueira, S. Rodrigues, C. S. Perone, and R. Castro, ``The impact of feature causality on normal behaviour models for SCADA-based wind turbine fault detection,'' arXiv:1906.12329, 2019.
+\bibitem{r2} Y. Lee, C. Park, N. Kim, J. Ahn, and J. Jeong, ``LSTM-Autoencoder Based Anomaly Detection Using Vibration Data of Wind Turbines,'' \textit{Sensors}, vol. 24, no. 9, Art. no. 2833, 2024.
+\bibitem{r4} Y. Wang, Y. Zhao, and S. Addepalli, ``Remaining Useful Life Prediction using Deep Learning Approaches: A Review,'' \textit{Procedia Manuf.}, vol. 49, pp. 81--88, 2020, doi: 10.1016/j.promfg.2020.06.015.
 \bibitem{r31} R. Pradhan, ``Deep Autoencoder Networks for Fault Detection in AC Microgrids,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--6, doi: 10.1109/AIEI69164.2026.11497941.
+\bibitem{r30} P. K. J. S., S. S., S. P. B., and V. M., ``Hybrid Machine Learning-Based Wind Power Prediction with Anomaly Detection,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--5, doi: 10.1109/AIEI69164.2026.11496741.
 \bibitem{r32} A. S. Kumar \textit{et al.}, ``Predictive Maintenance System for Smart Home Appliances Using IoT Sensor Data and Deep Learning,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--6, doi: 10.1109/AIEI69164.2026.11497140.
 \bibitem{r33} I. Ramesh, P. Jethi, M. K., K. R. Kalla, and S. S. Sahoo, ``Robust and Explainable Evaluation of Ensemble Learning Models for Line-to-Ground Fault Classification,'' in \textit{Proc. IEEE Int. Conf. AI Eng. Innov. (AIEI)}, 2026, pp. 1--6, doi: 10.1109/AIEI69164.2026.11496793.
+\bibitem{r17} C. M. A. Roelofs, M.-A. Lutz, S. Faulstich, and S. Vogt, ``Autoencoder-based anomaly root cause analysis for wind turbines,'' \textit{Energy and AI}, vol. 4, Art. no. 100065, 2021, doi: 10.1016/j.egyai.2021.100065.
+\bibitem{r18} C. M. A. Roelofs, C. G\"uck, and S. Faulstich, ``Transfer learning applications for autoencoder-based anomaly detection in wind turbines,'' \textit{Energy and AI}, vol. 17, Art. no. 100373, 2024, doi: 10.1016/j.egyai.2024.100373.
+\bibitem{r7} F. Stadtmann \textit{et al.}, ``Digital Twins in Wind Energy: Emerging Technologies and Industry-Informed Future Directions,'' \textit{IEEE Access}, vol. 11, pp. 110762--110795, 2023.
+\bibitem{r14} R. Pacheco-Blazquez, J. Garcia-Espinosa, D. Di Capua, and A. Pastor Sanchez, ``A Digital Twin for Assessing the Remaining Useful Life of Offshore Wind Turbine Structures,'' \textit{J. Mar. Sci. Eng.}, vol. 12, no. 4, Art. no. 573, 2024.
+\bibitem{r15} A. Pastor-Sanchez \textit{et al.}, ``Real-Time Digital Twin for Structural Health Monitoring of Floating Offshore Wind Turbines,'' \textit{J. Mar. Sci. Eng.}, vol. 13, no. 10, Art. no. 1953, 2025.
+\bibitem{r16} F. T. Liu, K. M. Ting, and Z.-H. Zhou, ``Isolation Forest,'' in \textit{Proc. IEEE Int. Conf. Data Mining (ICDM)}, 2008, pp. 413--422.
+\bibitem{r27} A. Lavin and S. Ahmad, ``Evaluating real-time anomaly detection algorithms -- the Numenta Anomaly Benchmark,'' in \textit{Proc. IEEE 14th Int. Conf. Mach. Learn. Appl. (ICMLA)}, 2015, pp. 38--44, doi: 10.1109/ICMLA.2015.141.
 \end{thebibliography}
 
 \end{document}
