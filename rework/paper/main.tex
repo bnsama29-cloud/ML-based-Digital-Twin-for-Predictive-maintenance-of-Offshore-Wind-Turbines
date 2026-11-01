@@ -7,6 +7,8 @@
 \usepackage{xcolor}
 \usepackage{booktabs}
 \usepackage{url}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
 
 % Red placeholders: every one of these must be replaced by a number from
 % results/paper_tables (merge_results.py) or results/deep44 (analyze_44.py).
@@ -75,7 +77,25 @@ This leaves a gap: no study we know of tests these corrections on every fault an
 \section{Related Work}
 SCADA-based condition monitoring is reviewed in \cite{r20}. Early normal behaviour models predicted one temperature from a few operating inputs and flagged large residuals \cite{r21,r22,r23}; change-point detection keeps such models robust after component swaps \cite{r24}. Inputs physically coupled to the target improve the fit but can hide the fault \cite{r26}, a point that returns in our results. Deep models extend the idea to many channels \cite{r2,r4,r25}, and autoencoders treat a large reconstruction error as a sign that the current row does not look like healthy training rows \cite{r10,r11}. Recent work at this conference applied autoencoder features to fault classification in AC microgrids \cite{r31}, threshold-based anomaly flags to wind power prediction \cite{r30}, deep learning to appliance predictive maintenance \cite{r32} and noise-robustness tests to line-fault classifiers \cite{r33}; we extend this line to a multi-farm benchmark with time-ordered splits and event-level scoring.
 
-The work closest to ours comes from the group that released CARE-to-Compare. ARCANA attributes an autoencoder anomaly to input features through a sparse correction of the input \cite{r17}, and transfer learning lets a model trained on one turbine serve another \cite{r18}. The benchmark paper defines the CARE score and reports 0.66 for an autoencoder whose layer sizes, learning rate and thresholds were tuned per farm, with an error-predicting adaptive threshold on farms A and B, and 0.5 for random predictions \cite{r12}. Our condition normalisation is a post-hoc relative of that adaptive threshold; the difference is that nothing is tuned on test data. Digital-twin surveys \cite{r7,r8} and structural twins \cite{r14,r15} motivate the playback view; reporting follows the REFORMS checklist \cite{r28}.
+The work closest to ours comes from the group that released CARE-to-Compare. ARCANA attributes an autoencoder anomaly to input features through a sparse correction of the input \cite{r17}, and transfer learning lets a model trained on one turbine serve another \cite{r18}. The benchmark paper defines the CARE score and reports 0.66 for an autoencoder whose layer sizes, learning rate and thresholds were tuned per farm, with an error-predicting adaptive threshold on farms A and B, and 0.5 for random predictions \cite{r12}. Our condition normalisation is a post-hoc relative of that adaptive threshold; the difference is that nothing is tuned on test data. Digital-twin surveys \cite{r7,r8} and structural twins \cite{r14,r15} motivate the playback view; reporting follows the REFORMS checklist \cite{r28}. Table~\ref{tab:scope} places this work against selected studies.
+
+\begin{table}[t]
+\caption{Evaluation setup of this work against selected prior studies}
+\label{tab:scope}
+\centering
+\setlength{\tabcolsep}{2.2pt}
+\begin{tabular}{llllcc}
+\toprule
+Work & Data & Split & Baselines & Noise & Attr.\\
+\midrule
+Pradhan \cite{r31} & simulated & random 80/20 & 3 classifiers & no & no\\
+J S et al.\ \cite{r30} & 1 wind dataset & random 80/20 & ensembles & no & no\\
+Ramesh et al.\ \cite{r33} & line signals & $k$-fold & 3 ensembles & yes & no\\
+G\"uck et al.\ \cite{r12} & 95 real & time-ordered & trivial & no & no\\
+This paper & 95 real & time-ordered & 5 + floors & yes & yes\\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Dataset and Leakage Rules}
 CARE-to-Compare \cite{r12} holds 95 datasets from three farms (Table~\ref{tab:data}). Farm A is onshore in Portugal (86 columns); farms B and C are offshore in Germany (257 and 957 columns). Each dataset covers one turbine with about a year of training data and a prediction window of 4 to 98 days that holds either a labelled event ending in a fault or a normal period. Status codes 0 and 2 count as normal operation; farm A's codes come from the fault logbook, so they choose training rows but are ignored in evaluation, as in the benchmark's reference code. Each farm publishes a plain description of every sensor, and most faults carry a short operator note on the root cause.
@@ -107,7 +127,27 @@ The main detector is a dense autoencoder (AE), $d\!\to\!256\!\to\!64\!\to\!16\!\
 Let $\mathbf{u}(t)$ hold wind speed, active power, rotor speed and ambient temperature. A histogram gradient-boosting regressor $g$ (200 trees, rate 0.05) is fitted on $\mathcal{C}_a$, which no detector trained on, to predict $\log e$ from $\mathbf{u}$, and the normalised score is $r(t)=\log e(t)-g(\mathbf{u}(t))$, the part of the error the operating point does not explain. A causal 6-hour rolling median then removes isolated spikes. Every detector is reported raw, smoothed, normalised, and both.
 
 \subsection{Thresholds, alarms and evaluation}
-A row is flagged when its score exceeds the 99th percentile of the same score on $\mathcal{C}_b$. The benchmark's counter \cite{r12} rises on flagged normal-status rows and falls on clean ones; an alarm is raised at 72 (12~h). The CARE score \cite{r12} combines coverage (row-wise $F_{0.5}$ in fault windows), accuracy (unflagged share of normal datasets), reliability (event-wise $F_{0.5}$ over all datasets) and earliness \cite{r27} as $(\mathrm{Cov}+\mathrm{Earl}+\mathrm{Rel}+2\,\mathrm{Acc})/5$. Differences between two configurations are tested with a paired bootstrap that resamples fault and normal datasets separately (1000 draws). To measure what tuning is worth without touching the test farm, the quantile $q\in\{0.95,\dots,0.999\}$ and counter $k\in\{36,72,144\}$ are chosen on two farms and applied to the third, for each farm in turn (leave-one-farm-out, LOFO).
+A row is flagged when its score exceeds the 99th percentile of the same score on $\mathcal{C}_b$. The benchmark's counter \cite{r12} rises on flagged normal-status rows and falls on clean ones; an alarm is raised at 72 (12~h). The CARE score \cite{r12} combines coverage (row-wise $F_{0.5}$ in fault windows), accuracy (unflagged share of normal datasets), reliability (event-wise $F_{0.5}$ over all datasets) and earliness \cite{r27} as $(\mathrm{Cov}+\mathrm{Earl}+\mathrm{Rel}+2\,\mathrm{Acc})/5$. Differences between two configurations are tested with a paired bootstrap that resamples fault and normal datasets separately (1000 draws). To measure what tuning is worth without touching the test farm, the quantile $q\in\{0.95,\dots,0.999\}$ and counter $k\in\{36,72,144\}$ are chosen on two farms and applied to the third, for each farm in turn (leave-one-farm-out, LOFO). Algorithm~\ref{alg:pipeline} summarises the scoring of one dataset.
+
+\begin{algorithm}[t]
+\caption{Leakage-safe scoring of one turbine dataset}
+\label{alg:pipeline}
+\small
+\begin{algorithmic}[1]
+\Require SCADA rows $\mathbf{x}(t)$, operating conditions $\mathbf{u}(t)$, status $s(t)$, train/test flag
+\State $\mathcal{T}\gets$ training rows with $s\in\{0,2\}$, minus idle rows in good wind
+\State Split $\mathcal{T}$ in time: fit rows $\mathcal{F}$ (85\%), then $\mathcal{C}_a$, $\mathcal{C}_b$ (7.5\% each)
+\State Fit scaler, imputer and channel filter on $\mathcal{F}$ only; transform all rows
+\State Train detector $D$ on $\mathcal{F}$, early-stop on $\mathcal{C}_a\cup\mathcal{C}_b$; $e(t)\gets D(\mathbf{x}(t))$
+\State Fit $g$ on $\mathcal{C}_a$: $\log e \sim \mathbf{u}$; \ $r(t)\gets\log e(t)-g(\mathbf{u}(t))$
+\State $\tilde r(t)\gets$ median of $r$ over the previous 6~h \Comment{causal}
+\State $\tau\gets$ 99th percentile of $\tilde r$ on $\mathcal{C}_b$
+\For{each prediction row $t$ in time order}
+\State $c\gets c+1$ if $\tilde r(t)>\tau$ and $s(t)$ normal; $c\gets\max(c-1,0)$ if $\tilde r(t)\le\tau$
+\State \textbf{if} $c\ge 72$ \textbf{then} raise alarm; rank plant areas by channel error ratio
+\EndFor
+\end{algorithmic}
+\end{algorithm}
 
 \subsection{Attribution, health index and robustness}
 Each channel is assigned to one of ten plant areas by ordered keyword rules on its published description. Over the labelled window, each channel's error is divided by its mean error on held-out rows, and areas are ranked by the mean ratio, the summed ratio, or a vote of the ten highest-ratio channels. The authors mapped each operator note to one or more areas; five vague notes were left out, leaving 40 faults. Floors are a random ranking, always naming the commonest area (an oracle, since it sees the labels), and the mean-ratio rule on absolute z-scores, which needs no model.
@@ -116,7 +156,7 @@ For case studies the normalised, smoothed score $\tilde r$ is mapped to a health
 
 \section{Results}
 \subsection{Detection on 95 datasets}
-Table~\ref{tab:care} gives the CARE score of each detector. With the fixed settings the plain AE reaches 0.584 and the full pipeline 0.592, clearly above random but below the tuned benchmark AE. Condition normalisation alone lowers the score to 0.568: it raises accuracy on normal periods from 0.962 to 0.970 and cuts alarms there from 5 to 4, but detected faults fall from 11.3 to 10.3. A likely reason is that part of the fault signal rises with load, so the regressor learns to expect it \cite{r26}. The paired bootstrap finds none of the AE post-processing differences reliable (smoothing over raw $+0.011$, 95\% CI $-0.015$ to $0.044$; normalisation over raw $-0.017$, $-0.039$ to $0.008$), and PCA is level with the AE ($+0.007$, $-0.030$ to $0.044$). The CAE matches the AE with slightly fewer false alarms ($+0.006$, $-0.001$ to $0.015$). The LSTM AE is significantly lower ($-0.054$, $-0.092$ to $-0.019$), and the sigmoid output that an earlier version of this pipeline used costs $0.086$ ($0.025$ to $0.146$): its median best validation loss is 0.71 against 0.20 for the linear head. Post-processing matters most for weak detectors: IF rises from 0.471 to 0.518 ($+0.047$, $0.003$ to $0.091$). The full AE pipeline detects 15.3 of 45 faults (95\% CI 0.21--0.48) with alarms in 7 of 50 normal periods, a median first alarm 147~h before the end of the fault window, and works best on farm A (5 of 12 faults, no false alarm) and worst on farm C (8 of 27), whose pitch, hub-electronics and communication faults leave little trace in 10-minute averages.
+Table~\ref{tab:care} gives the CARE score of each detector. With the fixed settings the plain AE reaches 0.584 and the full pipeline 0.592, clearly above random but below the tuned benchmark AE. Condition normalisation alone lowers the score to 0.568: it raises accuracy on normal periods from 0.962 to 0.970 and cuts alarms there from 5 to 4, but detected faults fall from 11.3 to 10.3. A likely reason is that part of the fault signal rises with load, so the regressor learns to expect it \cite{r26}. The paired bootstrap finds none of the AE post-processing differences reliable (smoothing over raw $+0.011$, 95\% CI $-0.015$ to $0.044$; normalisation over raw $-0.017$, $-0.039$ to $0.008$), and PCA is level with the AE ($+0.007$, $-0.030$ to $0.044$). The CAE matches the AE with slightly fewer false alarms ($+0.006$, $-0.001$ to $0.015$). The LSTM AE is significantly lower ($-0.054$, $-0.092$ to $-0.019$), and the sigmoid output that an earlier version of this pipeline used costs $0.086$ ($0.025$ to $0.146$): its median best validation loss is 0.71 against 0.20 for the linear head. Post-processing matters most for weak detectors: IF rises from 0.471 to 0.518 ($+0.047$, $0.003$ to $0.091$). The full AE pipeline detects 15.3 of 45 faults (95\% CI 0.21--0.48) with alarms in 7 of 50 normal periods, a median first alarm 147~h before the end of the fault window, and works best on farm A (5 of 12 faults, no false alarm) and worst on farm C (8 of 27), whose pitch, hub-electronics and communication faults leave little trace in 10-minute averages. At the event level (Table~\ref{tab:farm}) the neural detectors and PCA reach a precision of about 0.65--0.69 at a recall of 0.23--0.36: when they alarm they are usually right, but most faults pass unflagged. No detector is best on every farm: PCA leads on farm C, the largest, the AEs lead on farms A and B, and the LSTM AE raises no alarm at all on farm B, which sets its CARE score there to zero by definition.
 
 \begin{table}[t]
 \caption{CARE score on all 95 datasets (mean $\pm$ s.d.\ over three seeds where marked). Det.: faults detected of 45; FA: normal periods with an alarm, of 50. Reference \cite{r12}: per-farm tuned AE 0.66, random 0.5.}
@@ -143,6 +183,26 @@ Isolation Forest & raw & 0.471$\pm$.007 & 0.11 & 0.981 & 2.3 & 4.3\\
 Isolation Forest & + both & 0.518$\pm$.004 & 0.14 & 0.979 & 9.3 & 8.3\\
 3$\sigma$ fraction & raw & 0.482 & 0.11 & 0.979 & 4 & 9\\
 3$\sigma$ fraction & + both & 0.520 & 0.14 & 0.982 & 8 & 4\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{Full pipeline (normalisation + smoothing): CARE per farm and event-level precision (P), recall (R), F1 and specificity (Spec.: share of normal periods without alarm)}
+\label{tab:farm}
+\centering
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccccc}
+\toprule
+Detector & \multicolumn{3}{c}{CARE by farm} & P & R & F1 & Spec.\\
+ & A & B & C & & & & \\
+\midrule
+AE & 0.604 & 0.580 & 0.592 & 0.69 & 0.34 & 0.46 & 0.86\\
+Conditional AE & 0.603 & 0.583 & 0.593 & 0.67 & 0.36 & 0.46 & 0.84\\
+LSTM AE & 0.599 & 0.000 & 0.569 & 0.67 & 0.23 & 0.34 & 0.90\\
+PCA & 0.555 & 0.578 & 0.625 & 0.64 & 0.36 & 0.46 & 0.82\\
+Isolation Forest & 0.578 & 0.522 & 0.490 & 0.53 & 0.21 & 0.30 & 0.83\\
+3$\sigma$ fraction & 0.539 & 0.518 & 0.511 & 0.67 & 0.18 & 0.28 & 0.92\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -179,7 +239,7 @@ Most common area (oracle) & 0.30 & 0.70\\
 \end{table}
 
 \subsection{Case studies}
-Dataset 40 (farm A) ends in a generator-bearing failure. The full pipeline raised its first alarm about 45~h after the start of the 31-day fault window and kept alarming through it (Fig.~\ref{fig:hi}); generator was the top-ranked area (mean error ratio 13.1, ahead of gearbox at 12.9). At every gate the first work order fell on that first alarm, about 29 days before the window ended, with no trigger in $\mathcal{C}_b$ or before the event (Fig.~\ref{fig:ttt}). The score was also high on many rows just before the window and on two short episodes in the training year, so some alarms would have reached the operator earlier without a confirmed fault. Dataset 44 (farm C, a cooling-water valve left in the wrong position after maintenance) was missed: only 20 of 8788 window rows crossed the threshold, although the cooling area still ranked first of ten. A gradient-boosting model of cooling-water outlet temperature (MAE 1.4~$^\circ$C, $R^2=0.31$ on later rows) shows a residual shift of only 0.6~$^\circ$C during the fault, well inside its error, consistent with the miss.
+Dataset 40 (farm A) ends in a generator-bearing failure. The full pipeline raised its first alarm about 45~h after the start of the 31-day fault window and kept alarming through it (Fig.~\ref{fig:hi}); generator was the top-ranked area (mean error ratio 13.1, ahead of gearbox at 12.9; Fig.~\ref{fig:rca}). At every gate the first work order fell on that first alarm, about 29 days before the window ended, with no trigger in $\mathcal{C}_b$ or before the event (Fig.~\ref{fig:ttt}). The score was also high on many rows just before the window and on two short episodes in the training year, so some alarms would have reached the operator earlier without a confirmed fault. Dataset 44 (farm C, a cooling-water valve left in the wrong position after maintenance) was missed: only 20 of 8788 window rows crossed the threshold, although the cooling area still ranked first of ten. A gradient-boosting model of cooling-water outlet temperature (MAE 1.4~$^\circ$C, $R^2=0.31$ on later rows) shows a residual shift of only 0.6~$^\circ$C during the fault, well inside its error, consistent with the miss.
 
 \begin{figure}[t]
 \centering
@@ -190,13 +250,27 @@ Dataset 40 (farm A) ends in a generator-bearing failure. The full pipeline raise
 
 \begin{figure}[t]
 \centering
+\includegraphics[width=0.78\columnwidth]{figures/fig_rca_40.png}
+\caption{Plant-area attribution over the fault window of dataset 40: mean ratio of channel error to its healthy level. The operator's root cause is the generator.}
+\label{fig:rca}
+\end{figure}
+
+\begin{figure}[t]
+\centering
 \includegraphics[width=\columnwidth]{figures/fig_ttt_40.png}
 \caption{Time to $\mathrm{HI}=0.2$ in the prediction window of dataset 40 with a 95\% band from the slope standard error; dashed: 168~h gate.}
 \label{fig:ttt}
 \end{figure}
 
 \subsection{Robustness and compute cost}
-Corrupting the prediction window without moving the threshold mainly raises false alarms: for the full AE pipeline, alarms in normal periods grow from 6 to 13, 25 and 30 of 50 at noise $\sigma=0.1$, 0.3 and 0.5, and to 19 and 27 with 5\% and 20\% missing entries, while accuracy falls from 0.95 to 0.52. The CARE score barely moves (0.546--0.611) because extra detections in fault windows offset the false alarms, which shows that the score alone can hide a sensor problem. The threshold must therefore be recalibrated when sensor quality changes. Table~\ref{tab:time} lists median compute times on a Kaggle T4 GPU: every detector fits in under 25~s per turbine-year and scores 1000 rows in at most 10~ms, so all are cheap enough for a 10-minute SCADA stream. The playback scene in Unity reads a CSV of measured wind speed, rotor speed, power and temperatures with the score, alarm, HI and time-to-threshold band; it is a briefing view, not a closed-loop twin.
+Corrupting the prediction window without moving the threshold mainly raises false alarms (Fig.~\ref{fig:robust}): for the full AE pipeline, alarms in normal periods grow from 6 to 13, 25 and 30 of 50 at noise $\sigma=0.1$, 0.3 and 0.5, and to 19 and 27 with 5\% and 20\% missing entries, while accuracy falls from 0.95 to 0.52. The CARE score barely moves (0.546--0.611) because extra detections in fault windows offset the false alarms, which shows that the score alone can hide a sensor problem. The threshold must therefore be recalibrated when sensor quality changes. Table~\ref{tab:time} lists median compute times on a Kaggle T4 GPU: every detector fits in under 25~s per turbine-year and scores 1000 rows in at most 10~ms, so all are cheap enough for a 10-minute SCADA stream. The playback scene in Unity reads a CSV of measured wind speed, rotor speed, power and temperatures with the score, alarm, HI and time-to-threshold band; it is a briefing view, not a closed-loop twin.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig_robust.png}
+\caption{Effect of corrupting the prediction window (Gaussian noise $\sigma$ or missing entries) on the full pipeline with a fixed threshold, AE seed 0 and PCA.}
+\label{fig:robust}
+\end{figure}
 
 \begin{table}[t]
 \caption{Median compute time per dataset (Kaggle T4 GPU, farm C)}

@@ -90,6 +90,32 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     pipeline(a.out)
     care_bars(a.tables, a.out)
+    robustness(a.tables, a.out)
+
+
+
+def robustness(tables, out):
+    """False alarms (of 50 normal periods) and faults detected (of 45) under corruption."""
+    r = pd.read_csv(os.path.join(tables, "robustness.csv"))
+    conds = [("none", "clean"), ("noise0.1", "σ=0.1"), ("noise0.3", "σ=0.3"),
+             ("noise0.5", "σ=0.5"), ("missing0.05", "5% miss."), ("missing0.2", "20% miss.")]
+    fig, axes = plt.subplots(1, 2, figsize=(3.5, 1.9), sharey=True)
+    for ax, (col, title) in zip(axes, (("false_alarms", "Normal periods with alarm (of 50)"),
+                                      ("detected", "Faults detected (of 45)"))):
+        for j, (key, name, color, hatch) in enumerate((("ae_s0|cn_smooth", "AE", BLUE, None),
+                                                       ("pca|cn_smooth", "PCA", ORANGE, "////"))):
+            vals = [r[(r.key == key) & (r.corruption == c)][col].iloc[0] for c, _ in conds]
+            xs = [i + (j - 0.5) * 0.4 for i in range(len(conds))]
+            ax.bar(xs, vals, 0.38, color=color, hatch=hatch, edgecolor="white", lw=0, label=name)
+        ax.set_title(title, fontsize=6.5, color=INK)
+        ax.set_xticks(range(len(conds)), [n for _, n in conds], rotation=45, ha="right", fontsize=5.8)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", color="#e4e4e0", lw=0.5)
+        ax.set_axisbelow(True)
+    axes[0].legend(fontsize=6, frameon=False, loc="upper left")
+    fig.tight_layout(pad=0.3)
+    fig.savefig(os.path.join(out, "fig_robust.png"), dpi=300)
+
 
 
 if __name__ == "__main__":
