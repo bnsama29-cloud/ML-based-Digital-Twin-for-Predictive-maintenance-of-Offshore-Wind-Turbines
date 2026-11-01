@@ -18,7 +18,6 @@ import pandas as pd
 import wtpm_lib as L
 
 HI_TH = 0.20          # failure floor for the health index (planning constant)
-EWM_SPAN = 36         # 6 h causal smoothing of the residual
 SLOPE_WIN = 144       # 24 h causal window for the HI slope
 TTT_CAP = 720.0       # hours; anything slower is shown as "steady"
 GATES = (72, 168, 336)
@@ -30,10 +29,11 @@ UNITY_COLS = {"wind_speed_ms": "wind_speed_236_avg", "rotor_speed_rpm": "sensor_
               "rotor_bearing_temp_c": "sensor_196_avg", "cooling_water_out_c": "sensor_233_avg"}
 
 
-def health_index(score, val_idx):
-    e = pd.Series(score).ewm(span=EWM_SPAN, adjust=False).mean().to_numpy()
-    q50, q99 = np.median(e[val_idx]), np.quantile(e[val_idx], 0.99)
-    return 1.0 / (1.0 + np.maximum(0.0, e - q50) / (q99 - q50)), (q50, q99)
+def health_index(score, cal_idx):
+    """1 at the typical calibration score, 0.5 at the alarm threshold, towards 0 above it.
+    `score` is the already smoothed, condition-normalised score (causal)."""
+    q50, q99 = np.median(score[cal_idx]), np.quantile(score[cal_idx], L.THRESHOLD_Q)
+    return 1.0 / (1.0 + np.maximum(0.0, score - q50) / (q99 - q50)), (q50, q99)
 
 
 def time_to_threshold(hi, hours, win=SLOPE_WIN):
@@ -95,12 +95,12 @@ def main():
     ev = events.loc[a.event].copy()
     ev["event_id"] = a.event
     df = L.load_dataset(a.event, a.data_dir)
-    prep = L.prepare(df, feats)
+    prep = L.prepare(df, feats, farm="C", train_filter=True)
     errfn, _ = L.train_autoencoder(prep.X[prep.fit_idx], prep.X[prep.val_idx], seed=0,
                                    epochs=a.epochs)
     ch = errfn(prep.X)
-    score = ch.mean(axis=1)
-    thr = float(np.quantile(score[prep.val_idx], L.THRESHOLD_Q))
+    score = L.variants(ch.mean(axis=1), prep)["cn_smooth"]     # the full pipeline's score
+    thr = float(np.quantile(score[prep.cal_b], L.THRESHOLD_Q))
     summary = {"event": a.event, "description": ev["event_description"], "threshold": thr,
                "n_features": len(prep.columns),
                "detection": L.evaluate(score, prep, ev, thr)}
@@ -108,8 +108,8 @@ def main():
     # health index, alarms, time to threshold (all causal)
     ts = df["time_stamp"]
     hours = ((ts - ts.iloc[0]).dt.total_seconds() / 3600).to_numpy()
-    hi, (q50, q99) = health_index(score, prep.val_idx)
-    crit = L.criticality(score > thr, prep.normal_mask)
+    hi, (q50, q99) = health_index(score, prep.cal_b)
+    crit = L.criticality(score > thr, prep.eval_normal)
     alarm = crit >= L.ALARM_STEPS
     ttt, ttt_lo, ttt_hi, slope = time_to_threshold(hi, hours)
     start, end = ev["event_start"], ev["event_end"]
@@ -126,7 +126,7 @@ def main():
             visit_h = first_h + max(ttt[first[0]] - buf, 0) if len(first) else np.nan
             gate_rows.append(dict(gate_h=g, buffer_h=buf, first_trigger_h_rel_start=first_h,
                                   visit_h_rel_start=visit_h,
-                                  triggers_in_validation=int(trig[prep.val_idx].sum()),
+                                  triggers_in_validation=int(trig[prep.cal_b].sum()),
                                   triggers_before_event=int((trig & pre_event).sum())))
     pd.DataFrame(gate_rows).to_csv(os.path.join(a.out, "gate_sensitivity.csv"), index=False)
 
@@ -193,7 +193,7 @@ def main():
                 block = Xc[pm]
                 block[mask] = np.broadcast_to(med_z, block.shape)[mask]
                 Xc[pm] = block
-            s = errfn(Xc).mean(axis=1)
+            s = L.variants(errfn(Xc).mean(axis=1), prep)["cn_smooth"]
             r = L.evaluate(s, prep, ev, thr)
             fpr = r["fp"] / max(r["fp"] + r["tn"], 1)
             rob.append(dict(corruption=kind, level=lev, roc_auc=r["roc_auc"], pr_auc=r["pr_auc"],

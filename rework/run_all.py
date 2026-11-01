@@ -1,5 +1,5 @@
 """Everything in one go, on one Kaggle account:
-benchmark on all 58 farm C datasets -> dataset-44 deep dive -> paper tables.
+benchmark on all 95 datasets (farms A, B, C) -> dataset-44 deep dive -> paper tables.
 
     python run_all.py --data-dir /tmp/care --out /kaggle/working/results
 
@@ -33,7 +33,7 @@ def main():
 
     extra = ["--events", *map(str, a.events)] if a.events else []
     # keep 44 and 61 on disk: the deep dive needs them after the benchmark
-    step("benchmark (all datasets)", [os.path.join(here, "run_benchmark.py"),
+    step("benchmark (95 datasets)", [os.path.join(here, "run_benchmark.py"),
                                       "--data-dir", a.data_dir, "--out", bench, *extra])
     if not os.path.exists(os.path.join(deep, "summary_44.json")):
         step("dataset-44 deep dive", [os.path.join(here, "analyze_44.py"),

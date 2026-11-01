@@ -9,12 +9,12 @@
 \usepackage{url}
 
 % Red placeholders: every one of these must be replaced by a number from
-% merge_results.py (paper_tables/) or analyze_44.py (deep44/) before submission.
+% results/paper_tables (merge_results.py) or results/deep44 (analyze_44.py).
 \newcommand{\PH}[1]{\textcolor{red}{[#1]}}
 
 \begin{document}
 
-\title{SCADA Autoencoder Pipeline for Anomaly Attribution and Maintenance Timing of Offshore Wind Turbines}
+\title{Condition-Normalised Autoencoder Scoring for Fault Detection, Attribution and Maintenance Timing on Wind Turbine SCADA Data}
 
 \author{
 \IEEEauthorblockN{N Ananth}
@@ -45,197 +45,196 @@ veenagadad@rvce.edu.in}
 \maketitle
 
 \begin{abstract}
-Offshore wind turbines are expensive to visit and are watched mostly through 10-minute SCADA streams. This paper describes one pipeline that turns those streams into an anomaly alarm, a subsystem attribution, a health index, a time-to-threshold estimate with an uncertainty band, and a timestamped 3D playback. An autoencoder is trained only on normal-status training rows of each CARE-to-Compare farm-C dataset and evaluated on all 58 farm-C events (26 anomalies, 32 normal periods) against Isolation Forest, PCA and a per-channel 3$\sigma$ rule. With a threshold fixed in advance, the autoencoder raised an alarm in \PH{x} of 26 fault events and in \PH{y} of 32 normal periods, with a mean ROC-AUC of \PH{z} over three seeds. Sensor errors are grouped by the published sensor descriptions into ten plant areas, and the top-ranked area matched the operator's written root cause in \PH{p}\% of \PH{n} labelled events, against \PH{q}\% for always naming the most common area. On a cooling-water valve fault, a normal-behaviour model of generator cooling-water temperature drifted by \PH{d}~$^\circ$C from its expected value during the event. The data hold no component replacement dates, so the time-to-threshold figure is a planning estimate, not a calibrated remaining-useful-life forecast.
+Offshore wind turbines are expensive to visit and are watched mostly through 10-minute SCADA streams. Autoencoders trained on normal operation are a common way to flag unusual rows, but their reconstruction error also rises and falls with wind and load, which produces false alarms in healthy periods. This paper subtracts the part of the error that operating conditions explain, using a small regressor fitted on held-out normal data, and smooths the result causally before raising an alarm. The pipeline is evaluated on all 95 datasets of the CARE-to-Compare benchmark (three farms, 45 fault events, 50 normal periods) with the benchmark's CARE score, three seeds, three baselines and an ablation of each step, all fixed before testing. The full pipeline reaches a CARE score of \PH{0.xx $\pm$ 0.xx}, against \PH{0.xx} for the plain autoencoder and 0.5 for random predictions. Channel errors are then grouped into ten plant areas named from the published sensor descriptions, and the ranking is checked against the operators' written root causes: the top-ranked area was correct in \PH{xx}\% of \PH{n} labelled faults. A causal health index gives a time-to-threshold estimate with a 95\% band, and a Unity scene replays measured values with the model outputs. The data hold no component replacement dates, so the time figure is a planning aid, not a calibrated remaining-useful-life forecast.
 \end{abstract}
 
 \begin{IEEEkeywords}
-offshore wind, SCADA, autoencoder, anomaly attribution, health index, digital twin, predictive maintenance
+offshore wind, SCADA, autoencoder, normal behaviour model, CARE score, anomaly attribution, predictive maintenance, digital twin
 \end{IEEEkeywords}
 
 \section{Introduction}
-Offshore plants often produce more energy than onshore machines of similar rating, but a repair visit needs a vessel, a weather window, and spare parts \cite{r5,r8}. Two common policies sit at opposite extremes. Reactive repair waits for a stop. Calendar-based preventive repair visits the machine whether it needs work or not \cite{r3,r5}. A middle path is to read the SCADA archive, mark unusual behaviour early, and only then place a work order.
+Offshore plants often produce more energy than onshore machines of similar rating, but a repair visit needs a vessel, a weather window, and spare parts \cite{r5,r8}. Reactive repair waits for a stop, and calendar-based repair visits the machine whether it needs work or not \cite{r3,r5}. A middle path is to read the SCADA archive, mark unusual behaviour early, and only then place a work order \cite{r20}.
 
-Most SCADA papers stop at one of those steps. Threshold rules and linear models miss coupled non-linear channels \cite{r3,r9}. Deep models find unusual rows but rarely name a plant area \cite{r2,r4,r11}. Autoencoders give a reconstruction error that can stand in for asset health \cite{r10}, yet that score is seldom turned into a maintenance date or shown on a plant model \cite{r7,r8}. Full physics twins exist, but they need models and instrumentation that a public SCADA dump does not provide \cite{r7,r14}.
+Normal behaviour models do this by learning what the sensors look like when the turbine is healthy and flagging departures from it \cite{r21,r22,r23}. Autoencoders are a popular choice because one network can watch hundreds of channels at once \cite{r10,r11,r25}. Three problems keep coming up. First, reconstruction error depends on the operating point: a healthy turbine at rated power and one idling in light wind do not have the same typical error, so a single threshold either misses faults or fires in normal weather. Second, many published results come from one turbine, one fault, or a random split that places rows from the fault period in the training set, which makes scores hard to compare \cite{r12,r28,r29}. Third, an alarm that names a plant area is more useful than one that names an anonymous tag \cite{r17}, but attribution is rarely checked against what actually broke.
 
-An earlier version of this work trained on a single file that already contained the fault, reported no detection rates and compared against nothing. This version fixes those three gaps. The pipeline in Fig.~\ref{fig:pipeline} does the following.
-\begin{enumerate}
-\item Clean and scale each 10-minute SCADA matrix with statistics taken from normal training rows only.
-\item Train an autoencoder on those rows and score every row by reconstruction error.
-\item Raise an alarm when unusual rows persist, using the counter that ships with the benchmark \cite{r12}.
-\item Group channel errors into ten plant areas named from the sensor descriptions.
-\item Turn the error into a health index (HI) and read a causal HI slope as time to a chosen floor, with a 95\% band.
-\item Replay measured SCADA values and model outputs on a simplified Unity turbine.
-\end{enumerate}
-The contributions are kept to what the public data can support:
+An earlier version of this work had all three problems: it trained on a single file that already contained the fault, reported no detection rates, and compared against nothing. CSITSS reviewers rightly asked for a clean training split, precision and false-alarm rates, baselines, repeated runs, justified thresholds and an uncertainty band on the life estimate. This paper answers each point. Its contributions are:
 \begin{itemize}
-\item an evaluation on all 58 farm-C events with precision, recall, false-alarm rate and three baselines, repeated over three seeds;
-\item a check of subsystem attribution against the root causes that operators wrote into the dataset;
-\item a time-to-threshold estimate with an uncertainty band, plus a sensitivity study of the maintenance gate instead of hand-picked weights;
-\item a time-indexed 3D playback layer, not a closed-loop or physics twin.
+\item a condition-normalised score: a regressor fitted on held-out normal rows predicts the expected autoencoder error from wind speed, power, rotor speed and ambient temperature, and only the excess is used;
+\item an evaluation on all 95 CARE-to-Compare datasets with the benchmark's CARE score \cite{r12}, three seeds, Isolation Forest, PCA and a 3$\sigma$ rule as baselines, and an ablation of each processing step;
+\item a check of plant-area attribution against operator fault notes in three farms, compared with simple floors;
+\item a causal health index and time-to-threshold estimate with a 95\% band, a gate sensitivity study instead of hand-picked weights, and a playback of measured values in Unity.
 \end{itemize}
 
 \begin{figure*}[t]
 \centering
-\IfFileExists{figures/pipeline.png}{\includegraphics[width=0.95\textwidth]{figures/pipeline.png}}{\fbox{\parbox{0.9\textwidth}{\centering\vspace{1.5cm}\PH{Redraw Fig.~1: linear output, d-256-64-16 widths, no subsystem weights, alarm counter, HI band}\vspace{1.5cm}}}}
-\caption{Pipeline used in this study, from SCADA rows to alarm, attribution, health index, time-to-threshold band and playback.}
+\IfFileExists{figures/pipeline.png}{\includegraphics[width=0.95\textwidth]{figures/pipeline.png}}{\fbox{\parbox{0.9\textwidth}{\centering\vspace{1.5cm}\PH{Redraw Fig.~1: SCADA $\to$ preprocessing + training filter $\to$ AE ($d$-256-64-16) $\to$ error $\to$ condition normalisation (regressor on wind, power, rotor speed, ambient) $\to$ 6 h median $\to$ threshold + 12 h counter $\to$ alarm; side branches: plant-area attribution, health index + time-to-threshold band, Unity playback}\vspace{1.5cm}}}}
+\caption{Pipeline. The detector is trained on normal rows only; the condition model and the threshold use two separate held-out slices.}
 \label{fig:pipeline}
 \end{figure*}
 
 \section{Related Work}
-Physics-based condition models stay close to component equations, but they need parameters that anonymized SCADA files do not publish \cite{r3,r6,r9}. Vibration-based bearing and gearbox diagnostics are strong when those sensors exist \cite{r1}; the farm-C data used here are SCADA only. Statistical limits on single tags struggle once many channels move together \cite{r3}. Deep sequence models improve detection on vibration and SCADA traces \cite{r2,r4}, and autoencoders treat a large reconstruction error as a sign that the current row does not look like the rows seen in training \cite{r10,r11}. Those detectors seldom add a subsystem name or a work-order date.
+SCADA-based condition monitoring is reviewed in \cite{r20}. Early normal behaviour models predicted one temperature from a few operating inputs and flagged large residuals \cite{r21,r22,r23}; later work added change-point detection to keep such models robust after component swaps \cite{r24}. The choice of inputs matters: inputs that are physically coupled to the target improve the fit but can hide the fault \cite{r26}. Deep models extend the idea to many channels \cite{r2,r4,r25}, and autoencoders treat a large reconstruction error as a sign that the current row does not look like healthy training rows \cite{r10,r11}.
 
-Digital-twin surveys in wind energy rank implementations from a standalone 3D model up to an autonomous plant \cite{r7,r8}. Structural twins for towers and floating platforms estimate remaining life from load histories \cite{r14,r15}. The Unity scene in this paper sits lower on that scale: it is a descriptive and diagnostic playback of SCADA-derived scores.
+The work closest to ours comes from the group that released CARE-to-Compare. ARCANA attributes an autoencoder anomaly to input features by finding a sparse correction of the input \cite{r17}; transfer learning lets a model trained on one turbine serve another \cite{r18}; and a conditional autoencoder that sees operating conditions as inputs worked well for district-heating substations \cite{r19}. The benchmark paper itself defines the CARE score and reports 0.66 for a tuned autoencoder and 0.5 for random predictions \cite{r12}. Its earliness weighting follows the Numenta benchmark \cite{r27}. Our condition normalisation is a simpler, post-hoc relative of the conditional autoencoder: the detector is left unchanged and only its error is corrected.
 
-Explainable maintenance surveys ask for a chain that a technician can inspect \cite{r3}. The design here follows that request in a simple way: the anomaly score is a mean squared residual, the cause list is a ratio of those residuals inside named groups, and the planning date is a slope on the health index. No claim is made that this chain replaces a physics remaining-life model.
+Digital-twin surveys rank implementations from a standalone 3D model up to an autonomous plant \cite{r7,r8}; structural twins estimate remaining life from load histories \cite{r14,r15}. The Unity scene here is a descriptive playback. Reporting follows the REFORMS checklist for machine-learning-based science \cite{r28}.
 
 \section{Dataset}
-CARE-to-Compare releases 95 SCADA datasets from three farms \cite{r12}. Farm C is an offshore site in Germany with 957 columns per row at a 10-minute step. Each of its 58 datasets covers one turbine and splits into a training year and a prediction window. The prediction window holds either a labelled anomaly event (26 datasets) or a normal period (32 datasets). Every row carries a status code; codes 0 (normal production) and 2 (idling) count as normal operation. Sensor names are anonymized, but the release includes a plain-language description for each sensor (for example ``cooling water temp.\ generator outlet 1'') and, for most anomaly events, a short operator note on the root cause. Time stamps are shifted so that files open in 2022; plots use the shifted calendar.
+CARE-to-Compare \cite{r12} holds 95 datasets from three farms (Table~\ref{tab:data}). Farm A is an onshore farm in Portugal with 86 columns; farms B and C are offshore farms in Germany with 257 and 957 columns. Each dataset covers one turbine and splits into about a year of training data and a prediction window of 4 to 98 days. The prediction window holds either a labelled event that ends in a fault or a normal period. Every row carries a status code; codes 0 and 2 count as normal operation. Sensor names are anonymized, but each farm publishes a plain description of every sensor, and most fault events carry a short operator note on the root cause. Farm A's status codes were derived from the fault logbook, so they are used to choose training rows but ignored in evaluation, as in the benchmark's reference code.
 
-Three leakage rules were set before any result was seen. Models are fitted only on training-year rows with normal status; the last 15\% of those rows form a validation slice used for early stopping and thresholds and nothing else. Row identifiers, asset identifiers and the status code itself are removed from the inputs, because the status code partly encodes the label. Imputation medians, means and standard deviations come from the fitting rows and are reused unchanged on the prediction window.
+\begin{table}[t]
+\caption{Datasets used (all of CARE-to-Compare)}
+\label{tab:data}
+\centering
+\begin{tabular}{lcccc}
+\toprule
+Farm & Site & Columns & Fault events & Normal periods\\
+\midrule
+A & onshore & 86 & 12 & 10\\
+B & offshore & 257 & 6 & 9\\
+C & offshore & 957 & 27 & 31\\
+\midrule
+All & & & 45 & 50\\
+\bottomrule
+\end{tabular}
+\end{table}
 
-Angle channels (wind direction, which wraps at 360$^\circ$), channels with more than 30\% missing values in training and channels that are constant in training are dropped, leaving \PH{min--max} channels per dataset. Short gaps are forward-filled for up to one hour, remaining gaps take the training median, and each channel is standardized, $z=(x-\mu)/\sigma$, then clipped to $\pm10$.
+Leakage rules were fixed before any test result was seen. Models are fitted only on training-year rows with normal status. Following the benchmark paper, training rows where the wind is between 5 and 20~m/s but power is below 2\% of its training 99th percentile are also dropped, because a turbine standing still in good wind is not healthy behaviour \cite{r12}. The last 15\% of the remaining rows are held out and split in time into two calibration slices, $\mathcal{C}_a$ and $\mathcal{C}_b$. Row identifiers, asset identifiers and the status code are removed from the inputs. Angle channels, counter channels (cumulative energy), channels with over 30\% missing values in training and constant channels are dropped. Gaps up to one hour are forward-filled, the rest take the training median, and each channel is standardized on the training rows and clipped to $\pm10$.
 
 \section{Method}
-\subsection{Autoencoder scoring and alarms}
-Let $\mathbf{x}(t)\in\mathbb{R}^d$ be the standardized sensor vector at time $t$. A fully connected autoencoder with widths $d\!\to\!256\!\to\!64\!\to\!16\!\to\!64\!\to\!256\!\to\!d$ rebuilds that vector. Hidden layers use ReLU. The output layer is linear, because standardized inputs are unbounded and a sigmoid head cannot reproduce negative values; a sigmoid variant is kept only as an ablation. The anomaly score is
+\subsection{Detectors}
+The main detector is a fully connected autoencoder with widths $d\!\to\!256\!\to\!64\!\to\!16\!\to\!64\!\to\!256\!\to\!d$, ReLU hidden layers and a linear output, since standardized inputs are unbounded (an earlier sigmoid head could not reproduce negative values; on farm C it reached a validation loss of \PH{1.00} against \PH{0.21} for the linear head). Training uses Adam ($10^{-3}$), batches of 256 and at most 40 epochs, with early stopping after five epochs without improvement on the held-out rows. Each dataset is run with three seeds. The raw score is the mean squared reconstruction error
 \begin{equation}
-e(t)=\frac{1}{d}\lVert \mathbf{x}(t)-\hat{\mathbf{x}}(t)\rVert_2^2 .
+e(t)=\tfrac{1}{d}\lVert \mathbf{x}(t)-\hat{\mathbf{x}}(t)\rVert_2^2 .
 \end{equation}
-Training uses Adam (learning rate $10^{-3}$), batches of 256 and at most 40 epochs, stopping when the validation loss has not improved for five epochs. Three seeds are run per dataset (Table~\ref{tab:settings}).
+Three baselines see the same rows: Isolation Forest with 200 trees \cite{r16}, PCA keeping 95\% of training variance, and the fraction of channels lying more than 3$\sigma$ from their training mean.
 
-A row is flagged when $e(t)$ exceeds the 99th percentile of validation scores. Single flagged rows are common in any year of SCADA, so an alarm needs persistence. The benchmark's counter \cite{r12} is used as published: it rises by one on a flagged normal-status row, falls by one (not below zero) on a clean normal-status row, and holds on other statuses. An alarm is raised when it reaches 72, i.e.\ 12~h of net abnormal behaviour. An anomaly event counts as detected if an alarm occurs inside its labelled window; a normal dataset counts as a false alarm if an alarm occurs anywhere in its prediction window.
+\subsection{Condition normalisation and smoothing}
+Even on healthy rows, $e(t)$ depends on where the turbine is operating. Let $\mathbf{u}(t)$ hold wind speed, active power, rotor speed and ambient temperature. A histogram gradient-boosting regressor $g$ is fitted on slice $\mathcal{C}_a$, which the detector never trained on, to predict $\log e$ from $\mathbf{u}$. The normalised score is
+\begin{equation}
+r(t)=\log e(t)-g(\mathbf{u}(t)),
+\end{equation}
+the part of the error that the operating point does not explain. A causal 6-hour rolling median then removes isolated spikes. Every detector is reported raw, smoothed, normalised, and normalised plus smoothed, so the effect of each step can be read off directly.
 
-\begin{table}[!t]
+\subsection{Thresholds and alarms}
+A row is flagged when its score exceeds the 99th percentile of the same score on slice $\mathcal{C}_b$. Alarms use the benchmark's counter \cite{r12}: it rises by one on a flagged normal-status row, falls by one (not below zero) on a clean one, and holds on other statuses; an alarm is raised when it reaches 72, i.e.\ 12~h of net abnormal behaviour. All of these settings are listed in Table~\ref{tab:settings}.
+
+\begin{table}[t]
 \caption{Settings fixed before evaluation}
 \label{tab:settings}
 \centering
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{ll}
 \toprule
 Item & Setting\\
 \midrule
-Widths & $d\to256\to64\to16\to64\to256\to d$\\
-Activations & ReLU hidden, linear output\\
-Optimiser & Adam, $10^{-3}$, batch 256\\
-Epochs & $\le 40$, early stop after 5\\
+Training filter & wind 5--20 m/s and power $<2\%$ of $P_{99}$ removed\\
+Autoencoder & $d\to256\to64\to16\to64\to256\to d$, ReLU, linear out\\
+Optimiser & Adam $10^{-3}$, batch 256, $\le40$ epochs, patience 5\\
 Seeds & 0, 1, 2\\
-Row threshold & 99th pct.\ of validation score\\
+Condition model & HistGBR, 200 trees, rate 0.05, on $\mathcal{C}_a$\\
+Smoothing & causal rolling median, 6 h\\
+Row threshold & 99th percentile on $\mathcal{C}_b$\\
 Alarm & counter $\ge 72$ (12 h) \cite{r12}\\
-Baselines & Isolation Forest \cite{r16}, PCA (95\% var.), 3$\sigma$\\
+Baselines & Isolation Forest \cite{r16}, PCA (95\%), 3$\sigma$ fraction\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Baselines}
-Three baselines see exactly the same rows and thresholds: Isolation Forest with 200 trees \cite{r16}; PCA keeping 95\% of the training variance, scored by reconstruction error; and a rule that scores each row by the fraction of channels lying more than three standard deviations from their training mean.
+\subsection{Evaluation}
+The CARE score \cite{r12} combines four parts: coverage, a row-wise $F_{0.5}$ inside the labelled windows of fault datasets; accuracy, the share of rows left unflagged in normal datasets; reliability, an event-wise $F_{0.5}$ over all datasets based on the alarm counter; and earliness, a weighted share of flagged rows that favours the start of each window \cite{r27}. The score is $(\mathrm{Cov}+\mathrm{Earl}+\mathrm{Rel}+2\,\mathrm{Acc})/5$, with special cases when nothing is detected or accuracy falls to 0.5 or below. Our implementation follows the paper and, where the paper leaves a choice open, the authors' reference code. Abnormal-status rows are left out of coverage and accuracy. We also report how many faults were detected and how many normal periods raised an alarm, with 95\% Wilson intervals.
 
-\subsection{Subsystem attribution}
-Each channel is assigned to one of ten plant areas by keywords in its published description: pitch and hub, yaw, hydraulics and brakes, cooling, gearbox, generator, rotor and drivetrain, electrical, nacelle and tower, and environment. Rules are applied in a fixed order so that, for example, ``generator cooling air temperature'' falls under cooling and ``axis 1 cooling element temperature'' under pitch. The assignment is a heuristic, not an OEM schedule.
-
-Large groups would win any comparison based on summed error, so each channel's error over the event window is first divided by its own mean error on the validation slice, and the group score is the mean of those ratios,
-\begin{equation}
-C_k=\frac{1}{|S_k|}\sum_{i\in S_k}\frac{\bar e_i^{\,\mathrm{event}}}{\bar e_i^{\,\mathrm{val}}} .
-\end{equation}
-The summed form used in our earlier draft is also reported for comparison. For ground truth, the operator notes in the dataset were read and each anomaly event was given one or more plant areas by hand; \PH{k} notes that only mention communication faults or an unknown standstill were left out. Attribution is scored as top-1 and top-3 hit rates and compared with two floors: always naming the most common area, and a random ranking.
+\subsection{Plant-area attribution}
+Each channel is assigned to one of ten plant areas (pitch and hub, yaw, hydraulics and brakes, cooling, gearbox, generator, rotor and drivetrain, nacelle and tower, electrical, environment) by ordered keyword rules on its published description. Over the labelled window, each channel's error is divided by its own mean error on the held-out rows, and areas are ranked in three ways fixed in advance: by the mean ratio, by the summed ratio, and by a vote of the ten highest-ratio channels. For ground truth, the authors read every operator note and assigned one or more areas to it; \PH{k} vague notes (communication faults, unknown standstills) were left out. Rankings are scored by top-1 and top-3 hit rates against two floors: a random ranking, and always naming the most common area (an oracle floor, since it peeks at the labels).
 
 \subsection{Health index and time to threshold}
-The score is smoothed with a causal exponential average (span 6~h), giving $\tilde e(t)$. With $q_{50}$ and $q_{99}$ the median and 99th percentile of $\tilde e$ on the validation slice,
+For the case study, the normalised, smoothed score $\tilde r(t)$ is mapped to a health index using its median $q_{50}$ and 99th percentile $q_{99}$ on $\mathcal{C}_b$:
 \begin{equation}
-\mathrm{HI}(t)=\left(1+\frac{\max(0,\tilde e(t)-q_{50})}{q_{99}-q_{50}}\right)^{-1}.
+\mathrm{HI}(t)=\left(1+\frac{\max(0,\tilde r(t)-q_{50})}{q_{99}-q_{50}}\right)^{-1}.
 \end{equation}
-HI equals one at typical healthy error, 0.5 at the alarm level, and falls towards zero as error grows. Unlike min--max scaling over the whole file, it uses no future data.
+HI is one at typical healthy behaviour, 0.5 at the alarm threshold and falls towards zero beyond it, using no future data. The slope $s(t)$ is a least-squares fit of HI on time over the previous 24~h. The time to a floor $\mathrm{HI}_{th}=0.2$ is $\widehat T(t)=(\mathrm{HI}(t)-\mathrm{HI}_{th})/(-s(t))$ for $s(t)<0$, capped at 720~h, and $s\pm1.96\,\mathrm{SE}(s)$ gives a 95\% band. A work order is suggested when an alarm is active and $\widehat T$ falls below a gate $G$, with the visit a buffer $B$ earlier. Neither $G$ nor $B$ can be fitted without a maintenance log, so we report $G\in\{72,168,336\}$~h and $B\in\{12,24,48\}$~h as a sensitivity table instead of fixing them.
 
-The slope $s(t)$ is an ordinary least-squares fit of HI on time over the previous 24~h only. The time to a floor $\mathrm{HI}_{th}=0.2$ is
-\begin{equation}
-\widehat T(t)=\frac{\mathrm{HI}(t)-\mathrm{HI}_{th}}{-s(t)},\qquad s(t)<0,
-\end{equation}
-and is treated as steady (capped at 720~h) when the slope is not negative. Replacing $s$ with $s\pm1.96\,\mathrm{SE}(s)$ gives a 95\% band. The band describes how noisy the recent slope is; it does not cover the larger error of assuming that the slope will continue.
-
-\subsection{Maintenance gate}
-A work order is suggested when an alarm is active and $\widehat T$ falls below a gate $G$, with the visit placed a buffer $B$ earlier. The earlier draft fixed $G=168$~h, $B=24$~h and weighted subsystems by hand. Neither choice can be fitted without a cost model or maintenance log, so the subsystem weights are dropped and $G\in\{72,168,336\}$~h and $B\in\{12,24,48\}$~h are reported as a sensitivity table instead.
-
-\subsection{Temperature normal-behaviour model}
-A second, supervised check predicts two thermal channels from operating conditions: rotor bearing temperature and generator cooling-water outlet temperature. Inputs are rotor speed, grid active power, ambient temperature and wind speed (farm C has no humidity channel). A histogram gradient-boosting regressor is trained on the normal fitting rows of dataset 44 and compared with linear regression and a constant-mean floor. It is tested on the validation slice of the same turbine (later in time) and on the training year of another turbine (dataset 61). Confidence intervals come from a bootstrap that resamples whole days. On the fault window, the residual between measured and expected temperature is examined directly.
-
-\subsection{Robustness to noise and missing data}
-To probe sensor noise and dropouts, the prediction window of dataset 44 is corrupted after scaling, either with Gaussian noise ($\sigma=0.1,0.3,0.5$ in standardized units) or by replacing 5\% or 20\% of entries with the training median, and rescored with the unchanged model and threshold.
-
-\subsection{Playback model}
-A simplified rotor, nacelle and tower were built in Unity. A loader reads a time-indexed CSV of measured wind speed, rotor speed, active power, gearbox oil, rotor bearing and cooling-water temperatures, together with the anomaly score, alarm state, HI, $\widehat T$ and its band. A slider steps through the samples. The scene does not solve structural dynamics, does not write set-points back to a turbine and does not ingest a live stream; in the ranking used by wind-twin surveys \cite{r7} it is a descriptive and diagnostic playback.
+\subsection{Temperature model, robustness and playback}
+As a supervised cross-check, a gradient-boosting model predicts rotor-bearing and generator cooling-water outlet temperatures from rotor speed, power, ambient temperature and wind speed (farm C has no humidity channel). It is trained on normal rows of dataset 44, tested on later rows of the same turbine and on another turbine (dataset 61), and compared with linear regression and a constant-mean floor; intervals come from a bootstrap over whole days. To probe sensor noise and dropouts, the prediction window of dataset 44 is corrupted with Gaussian noise ($\sigma=0.1,0.3,0.5$ in standardized units) or 5\% and 20\% missing entries, and rescored without retraining. Finally, measured wind speed, rotor speed, power and temperatures are exported with the anomaly score, alarm, HI and $\widehat T$ band to a time-indexed CSV that drives a simplified Unity turbine.
 
 \section{Results}
-\subsection{Detection on 58 events}
-Table~\ref{tab:detection} lists the results. \PH{Two or three sentences: which method detects most events, at what false-alarm rate; whether the AE beats the baselines on ROC-AUC beyond the seed spread; how much the sigmoid head changes the result. Report what the numbers show, including if a baseline wins.} Point-wise PR-AUC is high for every method because the labelled window covers most of each prediction window; the prevalence of \PH{0.xx} is the score a random detector would reach, so ROC-AUC is the more useful comparison here. Detection delay, measured from the labelled event start, had a median of \PH{h}~h for the autoencoder.
+\subsection{Detection on 95 datasets}
+Table~\ref{tab:care} gives the CARE score of every detector and post-processing step. \PH{Two or three sentences, written from the table: (i) the full pipeline's CARE score against the plain AE and against the benchmark's 0.66 \cite{r12} and 0.5 random; (ii) which step adds the most (filter, normalisation or smoothing) beyond the seed spread; (iii) whether normalisation and smoothing also help the baselines, which would show the gain is in the post-processing rather than the network. Report a baseline winning if it does.} The full pipeline detected \PH{x} of 45 faults (95\% CI \PH{}) and raised alarms in \PH{y} of 50 normal periods (95\% CI \PH{}), with a median lead time of \PH{h}~h before the fault.
 
-\begin{table}[!t]
-\caption{Detection on farm C (26 anomaly, 32 normal datasets). AE: mean $\pm$ s.d.\ over 3 seeds. 95\% Wilson intervals in brackets.}
-\label{tab:detection}
+\begin{table}[t]
+\caption{CARE score on all 95 datasets. AE: mean $\pm$ s.d.\ over three seeds. Benchmark reference: tuned AE 0.66, random 0.5 \cite{r12}.}
+\label{tab:care}
 \centering
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lcccc}
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{llccccc}
 \toprule
-Method & Detected & False alarms & ROC-AUC & FPR (row)\\
+Detector & Post-proc. & CARE & Cov. & Acc. & Rel. & Earl.\\
 \midrule
-AE, linear & \PH{a}/26 & \PH{b}/32 & \PH{.xx$\pm$.xx} & \PH{.xxx}\\
-AE, sigmoid & \PH{}/26 & \PH{}/32 & \PH{} & \PH{}\\
-Isolation Forest & \PH{}/26 & \PH{}/32 & \PH{} & \PH{}\\
-PCA & \PH{}/26 & \PH{}/32 & \PH{} & \PH{}\\
-3$\sigma$ fraction & \PH{}/26 & \PH{}/32 & \PH{} & \PH{}\\
+AE & raw & \PH{} & \PH{} & \PH{} & \PH{} & \PH{}\\
+AE & + smooth & \PH{} & \PH{} & \PH{} & \PH{} & \PH{}\\
+AE & + cond.\ norm. & \PH{} & \PH{} & \PH{} & \PH{} & \PH{}\\
+AE & + both & \PH{} & \PH{} & \PH{} & \PH{} & \PH{}\\
+AE, no filter & + both & \PH{} & \PH{} & \PH{} & \PH{} & \PH{}\\
+Isolation Forest & raw / both & \PH{} & \PH{} & \PH{} & \PH{} & \PH{}\\
+PCA & raw / both & \PH{} & \PH{} & \PH{} & \PH{} & \PH{}\\
+3$\sigma$ fraction & raw / both & \PH{} & \PH{} & \PH{} & \PH{} & \PH{}\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Attribution against operator notes}
-Table~\ref{tab:attribution} scores the plant-area ranking. \PH{State the top-1 and top-3 hit rates against the two floors. Pitch faults dominate the notes, so say plainly whether the ranking beats ``always pitch''.} Dividing by each channel's own validation error matters: with summed scores, large groups such as electrical and cooling win most rankings regardless of the fault \PH{confirm with the sum row}.
+\PH{One sentence on the per-farm scores from care.csv (farm = A, B, C): where the pipeline works best and worst.} Faults in pitch systems, communication and hub electronics make up \PH{most} of farm C's events, and many of them leave little trace in 10-minute averages, which agrees with a recent finding that 28 of the 45 benchmark faults sit in systems no temperature sensor watches.\footnote{\url{https://github.com/kwwaleszczynski-del/wind-thermal-nbm}}
 
-\begin{table}[!t]
-\caption{Top-$k$ hit rate of attribution on \PH{n} labelled anomaly events}
+\subsection{Attribution against operator notes}
+Table~\ref{tab:attribution} scores the three ranking rules. \PH{State top-1 and top-3 for each rule against the random and oracle floors, per farm if space allows. Be explicit if the oracle floor wins on farm C because pitch dominates the notes, and if attribution works better on farms A and B, whose faults (gearbox, generator bearing, transformer, hydraulics) have dedicated sensors.}
+
+\begin{table}[t]
+\caption{Top-$k$ hit rate of plant-area attribution (\PH{n} labelled faults)}
 \label{tab:attribution}
 \centering
 \begin{tabular}{lcc}
 \toprule
 Rule & Top-1 & Top-3\\
 \midrule
-AE, mean ratio (2) & \PH{} & \PH{}\\
-AE, summed error & \PH{} & \PH{}\\
-Always most common area & \PH{} & \PH{}\\
+Mean ratio & \PH{} & \PH{}\\
+Summed ratio & \PH{} & \PH{}\\
+Top-10 channel vote & \PH{} & \PH{}\\
 Random ranking & \PH{} & \PH{}\\
+Most common area (oracle) & \PH{} & \PH{}\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Case study: cooling-water valve fault (dataset 44)}
-The operator note for dataset 44 reads ``valve in water cooling system was left in wrong position after maintenance''. Fig.~\ref{fig:hi} shows HI over the year. \PH{Describe what HI does before and during the labelled window. Give the first alarm time relative to the event start, or, if the fixed rule raised no alarm, say so plainly and give the ROC-AUC for this file instead.} Fig.~\ref{fig:rca} ranks the plant areas over the event window; cooling is ranked \PH{rank} of ten.
+\subsection{Case study: cooling-water valve fault}
+The operator note for dataset 44 (farm C) reads ``valve in water cooling system was left in wrong position after maintenance''. Fig.~\ref{fig:hi} shows the health index over the year with alarm periods. \PH{Describe HI before and inside the window and the first alarm relative to the event start, or state that no alarm fired.} Over the labelled window the cooling area ranked \PH{first} of ten (Fig.~\ref{fig:rca}). Fig.~\ref{fig:ttt} shows $\widehat T$ with its band; \PH{band width, and whether a work order is raised at each gate (Table~\ref{tab:gate})}.
 
-\begin{figure}[!t]
+\begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{figures/fig_hi.png}
 \caption{Health index for dataset 44 with alarm periods and the labelled event (shaded).}
 \label{fig:hi}
 \end{figure}
 
-\begin{figure}[!t]
+\begin{figure}[t]
 \centering
 \includegraphics[width=0.85\columnwidth]{figures/fig_rca.png}
 \caption{Plant-area attribution over the labelled window of dataset 44.}
 \label{fig:rca}
 \end{figure}
 
-Fig.~\ref{fig:ttt} shows $\widehat T$ and its band in the prediction window. \PH{Describe how wide the band is and whether $\widehat T$ crosses the 168 h gate inside the event. If no alarm fired, no work order is raised at any gate; state that.} Table~\ref{tab:gate} shows how the first work order moves with the gate and buffer. \PH{One sentence: earlier gates warn sooner but also trigger on the validation slice \,(n triggers), which is the cost of a looser gate.}
-
-\begin{figure}[!t]
+\begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{figures/fig_ttt.png}
 \caption{Time to $\mathrm{HI}=0.2$ with a 95\% band from the slope standard error.}
 \label{fig:ttt}
 \end{figure}
 
-\begin{table}[!t]
+\begin{table}[t]
 \caption{Gate sensitivity on dataset 44 (hours relative to event start)}
 \label{tab:gate}
 \centering
 \begin{tabular}{cccc}
 \toprule
-Gate $G$ & First trigger & Visit ($B$=24 h) & Triggers in val.\\
+Gate $G$ & First trigger & Visit ($B$=24 h) & Triggers in $\mathcal{C}_b$\\
 \midrule
 72 & \PH{} & \PH{} & \PH{}\\
 168 & \PH{} & \PH{} & \PH{}\\
@@ -244,10 +243,10 @@ Gate $G$ & First trigger & Visit ($B$=24 h) & Triggers in val.\\
 \end{tabular}
 \end{table}
 
-\subsection{Temperature normal-behaviour model}
-Table~\ref{tab:temp} gives the hold-out scores. \PH{Compare gradient boosting with the linear model and the mean floor, on the same turbine and on turbine 61. Note any drop across turbines.} Fig.~\ref{fig:temp} shows the cooling-water outlet temperature against its expected value during the fault: the mean residual is \PH{r1}~$^\circ$C on the validation slice and \PH{r2}~$^\circ$C inside the event, which is consistent with the valve fault described by the operator.
+\subsection{Temperature model and robustness}
+Table~\ref{tab:temp} gives the temperature hold-out scores. \PH{Compare gradient boosting with the linear model and the mean floor, on the same turbine and on turbine 61; note the drop across turbines.} During the valve fault the mean residual of cooling-water outlet temperature moved from \PH{r1}~$^\circ$C on held-out healthy rows to \PH{r2}~$^\circ$C (Fig.~\ref{fig:temp}). Under corruption, \PH{one sentence from robustness.csv: how ROC-AUC, detection and row false-alarm rate change with noise up to $\sigma=0.5$ and 20\% missing entries}.
 
-\begin{table}[!t]
+\begin{table}[t]
 \caption{Temperature model, gradient boosting (95\% day-block bootstrap CI)}
 \label{tab:temp}
 \centering
@@ -264,63 +263,57 @@ Cooling water out & turbine 61 & \PH{} & \PH{}\\
 \end{tabular}
 \end{table}
 
-\begin{figure}[!t]
+\begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{figures/fig_temp.png}
 \caption{Measured and expected generator cooling-water outlet temperature in the prediction window of dataset 44.}
 \label{fig:temp}
 \end{figure}
 
-\subsection{Robustness}
-\PH{Two sentences from robustness.csv: how ROC-AUC and detection delay change with noise up to $\sigma=0.5$ and with 20\% missing entries.}
+\subsection{Playback and scope}
+Fig.~\ref{fig:unity} is a frame from the Unity scene. Every value on screen is a measured SCADA reading or a model output for that time stamp; the scene is a briefing view, not evidence that the model is correct. Table~\ref{tab:scope} places the work against published SCADA and twin papers.
 
-\subsection{Playback scene}
-Fig.~\ref{fig:unity} is a frame from the Unity slider driven by the exported CSV. Every value on screen is either a measured SCADA reading or a model output for that time stamp. The scene is a briefing view, not evidence that the residual model is correct.
-
-\begin{figure}[!t]
+\begin{figure}[t]
 \centering
 \IfFileExists{figures/warning.png}{\includegraphics[width=\columnwidth]{figures/warning.png}}{\fbox{\parbox{0.9\columnwidth}{\centering Unity frame goes here}}}
 \caption{Unity playback of one sample from dataset 44. \PH{re-export the frame from unity\_telemetry.csv}}
 \label{fig:unity}
 \end{figure}
 
-\subsection{Place in the literature}
-Table~\ref{tab:scope} compares the scope of this pipeline with four published SCADA or twin papers. The point of the table is coverage, not a claim that every cell is state of the art.
-
-\begin{table}[!t]
+\begin{table}[t]
 \caption{Scope against selected prior papers}
 \label{tab:scope}
 \centering
-\begin{tabular}{lccccc}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccccc}
 \toprule
-Work & AD & RCA & Life & Plan & Twin\\
+Work & Bench. & AD & RCA & Life & Plan & Twin\\
 \midrule
-Lee et al.\ \cite{r2} & yes & no & no & no & no\\
-Encalada et al.\ \cite{r11} & yes & no & no & no & no\\
-Gonz\'alez et al.\ \cite{r10} & yes & no & no & no & no\\
-Stadtmann et al.\ \cite{r13} & yes & yes & no & no & yes\\
-This paper & yes & yes & est. & yes & play.\\
+Lee et al.\ \cite{r2} & no & yes & no & no & no & no\\
+Encalada et al.\ \cite{r11} & no & yes & no & no & no & no\\
+Roelofs et al.\ \cite{r17} & no & yes & yes & no & no & no\\
+G\"uck et al.\ \cite{r12} & yes & yes & no & no & no & no\\
+Stadtmann et al.\ \cite{r13} & no & yes & yes & no & no & yes\\
+This paper & yes & yes & checked & est. & yes & play.\\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Limits}
-\textit{Life figure.} $\widehat T$ is a short-horizon slope to an HI floor. CARE-to-Compare does not publish component replacement times, so no remaining-useful-life error can be computed. The band covers slope noise only.
+\section{Discussion and Limits}
+\textit{What the score can and cannot see.} Ten-minute averages smooth away short electrical and communication faults, and some pitch faults only show in signals that are not logged. No change to the detector can recover information that the data do not contain.
 
-\textit{Ground truth for attribution.} Plant areas were assigned to operator notes by the authors. The notes are brief, several events involve more than one area, and pitch faults dominate, so the small number of events limits what the hit rates can show.
+\textit{Life figure.} $\widehat T$ is a short-horizon slope to a chosen floor. The benchmark publishes no component replacement times, so no remaining-useful-life error can be computed, and the band covers slope noise only.
 
-\textit{Gate and floor.} $\mathrm{HI}_{th}=0.2$, the gate and the buffer are planning constants. Table~\ref{tab:gate} shows their effect but does not choose them.
+\textit{Attribution labels.} Plant areas were assigned to operator notes by the authors. The notes are brief and several faults involve more than one area.
 
-\textit{One farm.} All results come from farm C. Farms A and B have different sensor sets and were not tested.
-
-\textit{Offshore practice.} Communication loss, vessel delay and weather lock-outs sit outside the CSV. The robustness test covers noise and dropouts in the signal only.
+\textit{Deployment.} Communication loss, vessel delay and weather lock-outs sit outside the CSV, and the robustness test covers noise and dropouts in the signal only. The gate and buffer are left to the operator.
 
 \textit{Playback twin.} The Unity scene reads a CSV. It does not close a loop with the plant and does not host a physics model.
 
 \section{Conclusion}
-An autoencoder trained on normal training rows of each CARE-to-Compare farm-C dataset was evaluated on all 58 events with fixed thresholds, three seeds and three baselines. \PH{One sentence on detection and false alarms from Table~\ref{tab:detection}.} Ranking plant areas by size-normalised error \PH{did / did not} beat the simplest floor when checked against operator notes. On the cooling-valve fault of dataset 44, the cooling group ranked \PH{rank} and the cooling-water temperature model drifted by \PH{d}~$^\circ$C. A causal slope of the health index gives a time-to-threshold estimate with a band, which is a planning aid and not a fitted remaining-life model. The next steps are testing on farms A and B, and fitting the gate to a real maintenance log.
+\PH{Two sentences: the full pipeline's CARE score on all 95 datasets against the plain AE and the benchmark references, and which step mattered most.} \PH{One sentence on attribution against the floors.} On a cooling-valve fault, the cooling area ranked \PH{rank} and a temperature model showed the drift directly. The time-to-threshold band is a planning aid rather than a fitted life model. Next steps are fitting the gate to a real maintenance log and transferring the condition model between turbines \cite{r18}.
 
-\begin{thebibliography}{16}
+\begin{thebibliography}{29}
 \bibitem{r1} A. Tavares and M. Giesbrecht, ``Deep Learning-Based Fault Diagnosis in Wind Turbine Bearings and Gearboxes Using Vibration Signals,'' \textit{IEEE Access}, 2025, doi: 10.1109/ACCESS.2025.3636831.
 \bibitem{r2} Y. Lee, C. Park, N. Kim, J. Ahn, and J. Jeong, ``LSTM-Autoencoder Based Anomaly Detection Using Vibration Data of Wind Turbines,'' \textit{Sensors}, vol. 24, no. 9, Art. no. 2833, 2024.
 \bibitem{r3} L. Cummins \textit{et al.}, ``Explainable Predictive Maintenance: A Survey of Current Methods, Challenges and Opportunities,'' \textit{IEEE Access}, vol. 12, pp. 57574--57602, 2024.
@@ -337,6 +330,19 @@ An autoencoder trained on normal training rows of each CARE-to-Compare farm-C da
 \bibitem{r14} R. Pacheco-Blazquez, J. Garcia-Espinosa, D. Di Capua, and A. Pastor Sanchez, ``A Digital Twin for Assessing the Remaining Useful Life of Offshore Wind Turbine Structures,'' \textit{J. Mar. Sci. Eng.}, vol. 12, no. 4, Art. no. 573, 2024.
 \bibitem{r15} A. Pastor-Sanchez \textit{et al.}, ``Real-Time Digital Twin for Structural Health Monitoring of Floating Offshore Wind Turbines,'' \textit{J. Mar. Sci. Eng.}, vol. 13, no. 10, Art. no. 1953, 2025.
 \bibitem{r16} F. T. Liu, K. M. Ting, and Z.-H. Zhou, ``Isolation Forest,'' in \textit{Proc. IEEE Int. Conf. Data Mining (ICDM)}, 2008, pp. 413--422.
+\bibitem{r17} C. M. A. Roelofs, M.-A. Lutz, S. Faulstich, and S. Vogt, ``Autoencoder-based anomaly root cause analysis for wind turbines,'' \textit{Energy and AI}, vol. 4, Art. no. 100065, 2021, doi: 10.1016/j.egyai.2021.100065.
+\bibitem{r18} C. M. A. Roelofs, C. G\"uck, and S. Faulstich, ``Transfer learning applications for autoencoder-based anomaly detection in wind turbines,'' \textit{Energy and AI}, vol. 17, Art. no. 100373, 2024, doi: 10.1016/j.egyai.2024.100373.
+\bibitem{r19} C. M. A. Roelofs, E. Guevara Bastidas, T. Hugo, S. Faulstich, and A. Cadenbach, ``Enabling predictive maintenance in district heating substations: A labelled dataset and fault detection evaluation framework based on service data,'' \textit{Energy}, vol. 355, Art. no. 141178, 2026, doi: 10.1016/j.energy.2026.141178.
+\bibitem{r20} J. Tautz-Weinert and S. J. Watson, ``Using SCADA data for wind turbine condition monitoring -- a review,'' \textit{IET Renew. Power Gener.}, vol. 11, no. 4, pp. 382--394, 2017, doi: 10.1049/iet-rpg.2016.0248.
+\bibitem{r21} A. Zaher, S. D. J. McArthur, D. G. Infield, and Y. Patel, ``Online wind turbine fault detection through automated SCADA data analysis,'' \textit{Wind Energy}, vol. 12, no. 6, pp. 574--593, 2009, doi: 10.1002/we.319.
+\bibitem{r22} M. Schlechtingen and I. F. Santos, ``Wind turbine condition monitoring based on SCADA data using normal behavior models. Part 2: Application examples,'' \textit{Appl. Soft Comput.}, vol. 14, pp. 447--460, 2014, doi: 10.1016/j.asoc.2013.09.016.
+\bibitem{r23} P. Bangalore and L. B. Tjernberg, ``An artificial neural network approach for early fault detection of gearbox bearings,'' \textit{IEEE Trans. Smart Grid}, vol. 6, no. 2, pp. 980--987, 2015, doi: 10.1109/TSG.2014.2386305.
+\bibitem{r24} S. Letzgus, ``Change-point detection in wind turbine SCADA data for robust condition monitoring with normal behaviour models,'' \textit{Wind Energy Sci.}, vol. 5, pp. 1375--1397, 2020, doi: 10.5194/wes-5-1375-2020.
+\bibitem{r25} G. Helbing and M. Ritter, ``Deep learning for fault detection in wind turbines,'' \textit{Renew. Sustain. Energy Rev.}, vol. 98, pp. 189--198, 2018, doi: 10.1016/j.rser.2018.09.012.
+\bibitem{r26} T. Felgueira, S. Rodrigues, C. S. Perone, and R. Castro, ``The impact of feature causality on normal behaviour models for SCADA-based wind turbine fault detection,'' arXiv:1906.12329, 2019.
+\bibitem{r27} A. Lavin and S. Ahmad, ``Evaluating real-time anomaly detection algorithms -- the Numenta Anomaly Benchmark,'' in \textit{Proc. IEEE 14th Int. Conf. Mach. Learn. Appl. (ICMLA)}, 2015, pp. 38--44, doi: 10.1109/ICMLA.2015.141.
+\bibitem{r28} S. Kapoor \textit{et al.}, ``REFORMS: Consensus-based recommendations for machine-learning-based science,'' \textit{Sci. Adv.}, vol. 10, no. 18, Art. no. eadk3452, 2024, doi: 10.1126/sciadv.adk3452.
+\bibitem{r29} R. R. Nair, T. Babu, A. Panthakkan, B. Balusamy, and W. Mansoor, ``Hybrid autoencoder-based framework for early fault detection in wind turbines,'' arXiv:2510.15010, 2025.
 \end{thebibliography}
 
 \end{document}
