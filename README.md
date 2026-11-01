@@ -61,7 +61,7 @@ periods; 0.5 = random predictions; the benchmark's per-farm tuned AE reports 0.6
   up to 0.07; even tuning on the test data reaches only 0.619, so most of the gap to 0.66 is
   not threshold choice.
 - **Attribution:** the right plant area is ranked first for 37 % of 40 labelled faults
-  (random 12 %, raw z-scores 22 %, always naming the commonest area 30 %).
+  (random 12 %, raw z-scores 23 %, always naming the commonest area 30 %).
 - **Case studies:** for a generator-bearing failure (dataset 40) the alarm came roughly a
   month before the fault window closed, and the generator was the top-ranked area; a
   cooling-water valve fault (dataset 44) went undetected, yet cooling was still the top area.
