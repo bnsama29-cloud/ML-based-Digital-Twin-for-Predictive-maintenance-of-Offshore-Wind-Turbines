@@ -173,6 +173,8 @@ def lofo_table(raw):
                                          events=g))
         grid = pd.DataFrame(grid)
         sel = L.lofo_select(grid)
+        if sel.empty:                  # fewer than two farms finished for this detector
+            continue
         cares = [L.care_score(g) for _, g in sel.groupby("seed")]
         fixed = [L.care_score(per_event_setting(raw, k)) for k in keys]
         # in-sample best (tuned on the test data; an optimistic ceiling, not a result)
@@ -193,31 +195,43 @@ def lofo_table(raw):
 
 
 def bootstrap_table(raw, pairs, n_boot=1000, seed=0):
-    """Paired, label-stratified bootstrap over datasets of CARE differences (seed-averaged)."""
+    """Paired, label-stratified bootstrap over datasets of CARE differences (seed-averaged).
+    Each pair is compared on the datasets both configurations finished."""
     per = {}
 
     def rows_of(cfg):
         if cfg not in per:
             m, v = cfg.split("|")
-            per[cfg] = [per_event_setting(raw, k) for k in keys_of(raw, m, v)]
+            per[cfg] = [per_event_setting(raw, k).set_index(["farm", "event_id"])
+                        for k in keys_of(raw, m, v)]
         return per[cfg]
 
-    def care(cfg, idx):
-        return np.mean([L.care_score(r.iloc[idx])["care"] for r in rows_of(cfg)])
+    def care(rows, ids):
+        return np.mean([L.care_score(r.loc[ids])["care"] for r in rows])
 
-    lab = np.array([m["label"] for m, _ in raw])
-    an, no = np.flatnonzero(lab == "anomaly"), np.flatnonzero(lab == "normal")
     rng = np.random.default_rng(seed)
-    idxs = [np.r_[rng.choice(an, len(an)), rng.choice(no, len(no))] for _ in range(n_boot)]
-    full = np.arange(len(raw))
     out = []
     for a, b in pairs:
-        if not rows_of(a) or not rows_of(b):
+        ra, rb = rows_of(a), rows_of(b)
+        if not ra or not rb:
             continue
-        d = np.array([care(a, i) - care(b, i) for i in idxs])
-        out.append(dict(a=a, b=b, care_a=care(a, full), care_b=care(b, full),
-                        diff=care(a, full) - care(b, full), ci_lo=np.percentile(d, 2.5),
-                        ci_hi=np.percentile(d, 97.5), share_le0=float((d <= 0).mean())))
+        common = ra[0].index
+        for r in ra[1:] + rb:
+            common = common.intersection(r.index)
+        common = common.sort_values()
+        lab = ra[0].loc[common, "label"].to_numpy()
+        an, no = common[lab == "anomaly"], common[lab == "normal"]
+        if len(an) == 0 or len(no) == 0:
+            continue
+        d = []
+        for _ in range(n_boot):
+            ids = an[rng.integers(0, len(an), len(an))].append(no[rng.integers(0, len(no), len(no))])
+            d.append(care(ra, ids) - care(rb, ids))
+        d = np.array(d)
+        out.append(dict(a=a, b=b, n_datasets=len(common), care_a=care(ra, common),
+                        care_b=care(rb, common), diff=care(ra, common) - care(rb, common),
+                        ci_lo=np.percentile(d, 2.5), ci_hi=np.percentile(d, 97.5),
+                        share_le0=float((d <= 0).mean())))
     return pd.DataFrame(out)
 
 

@@ -33,6 +33,19 @@ display(FileLink('results_v3_scores.zip'))   # raw scores, only needed to recomp
 ```
 The Output tab then holds just these two files.
 
+## Run B (a second person's account, in parallel): LSTM autoencoder + compute time
+Same notebook settings and the same Cell 1. Then:
+```python
+!python run_all.py --detectors lstm --data-dir /tmp/care --out /tmp/results_b --zip /kaggle/working/results_v3_lstm.zip
+```
+```python
+from IPython.display import FileLink, display
+display(FileLink('results_v3_lstm.zip'))
+display(FileLink('results_v3_lstm_scores.zip'))   # needed here: run B is merged with run A from its scores
+```
+Run B adds a causal LSTM autoencoder (1 h windows, 3 seeds) and the fit / scoring time of
+every detector. Send both zips; the merge script combines run A and run B per dataset.
+
 ## What is in results_v3.zip
 | File | What it answers |
 |---|---|
