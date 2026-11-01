@@ -6,7 +6,7 @@
 \usepackage{textcomp}
 \usepackage{xcolor}
 \usepackage{booktabs}
-\usepackage{url}
+\usepackage[hyphens]{url}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 
@@ -44,7 +44,7 @@ veenagadad@rvce.edu.in}
 \maketitle
 
 \begin{abstract}
-Autoencoders trained on normal operation are widely used to flag faults in wind turbine SCADA data, but their reconstruction error also follows wind and load. This paper tests a common remedy, scoring only the error that operating conditions do not explain, together with causal smoothing, on all 95 datasets of the CARE-to-Compare benchmark (three farms, 45 faults, 50 normal periods). Splits are ordered in time, all settings are fixed before testing, and six detectors are compared over three seeds with the benchmark's CARE score and a paired bootstrap over datasets. The dense autoencoder scores 0.584 and 0.592 with normalisation and smoothing, against 0.5 for random predictions; PCA and a conditional autoencoder are statistically level with it, an LSTM autoencoder is lower (0.531) and a sigmoid output costs 0.086. Normalisation cuts false alarms but hides load-dependent fault signal, and helps weak detectors most (Isolation Forest +0.047). Thresholds tuned on two farms and tested on the third lift every detector to 0.58--0.61, below the 0.66 of a per-farm tuned autoencoder. Plant-area attribution names the operator's root cause first in 37\% of 40 faults, against 12\% for random and 22\% for raw z-scores, and a causal health index gives a work-order trigger with a time-to-threshold band on a generator-bearing fault.
+Autoencoders trained on normal operation are widely used to flag faults in wind turbine SCADA data, but their reconstruction error also follows wind and load. This paper tests a common remedy, scoring only the error that operating conditions do not explain, together with causal smoothing, on all 95 datasets of the CARE-to-Compare benchmark (three farms, 45 faults, 50 normal periods). Splits are ordered in time, all settings are fixed before testing, and six detectors are compared (three seeds for the stochastic ones) with the benchmark's CARE score and a paired bootstrap over datasets. The dense autoencoder scores 0.584 and 0.592 with normalisation and smoothing, against 0.5 for random predictions; PCA and a conditional autoencoder are statistically level with it, an LSTM autoencoder is lower (0.531) and a sigmoid output costs 0.086. Normalisation cuts false alarms but hides load-dependent fault signal, and helps weak detectors most (Isolation Forest +0.047). Thresholds tuned on two farms and tested on the third lift each detector's full pipeline to 0.58--0.61, below the 0.66 of a per-farm tuned autoencoder. Plant-area attribution names the operator's root cause first in 37\% of 40 faults, against 12\% for random and 22\% for raw z-scores, and a causal health index gives a work-order trigger with a time-to-threshold band on a generator-bearing fault.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -61,7 +61,7 @@ This leaves a gap: no study we know of tests these corrections on every fault an
 \item a leakage-safe evaluation of condition normalisation and causal smoothing on all 95 CARE-to-Compare datasets, across six detectors, three seeds and an ablation of every step, with a paired bootstrap over datasets;
 \item leave-one-farm-out threshold tuning, which shows how much of the gap to a tuned benchmark result comes from tuning rather than from the detector;
 \item a check of plant-area attribution against operator fault notes, against random, majority-class and model-free floors;
-\item a causal health index and time-to-threshold estimate with a 95\% band, a work-order gate sensitivity study, and compute times for every detector.
+\item a causal health index and time-to-threshold estimate with a 95\% band, a work-order gate sensitivity study, and compute times of the main detectors.
 \end{itemize}
 Code, settings and all result tables are public.\footnote{\url{https://github.com/bnsama29-cloud/ML-based-Digital-Twin-for-Predictive-maintenance-of-Offshore-Wind-Turbines}}
 
@@ -81,7 +81,7 @@ The work closest to ours comes from the group that released CARE-to-Compare. ARC
 \caption{Evaluation setup of this work against selected prior studies}
 \label{tab:scope}
 \centering
-\setlength{\tabcolsep}{2.2pt}
+\setlength{\tabcolsep}{1.6pt}
 \begin{tabular}{llllcc}
 \toprule
 Work & Data & Split & Baselines & Noise & Attr.\\
@@ -158,7 +158,7 @@ The benchmark's 0.66 came from per-farm tuning \cite{r12}. To see how much tunin
 \State $\tilde r(t)\gets$ median of $r$ over the previous 6~h \Comment{causal}
 \State $\tau\gets$ 99th percentile of $\tilde r$ on $\mathcal{C}_b$
 \For{each prediction row $t$ in time order}
-\State $c\gets c+1$ if $\tilde r(t)>\tau$ and $s(t)$ normal; $c\gets\max(c-1,0)$ if $\tilde r(t)\le\tau$
+\State $c\gets c+1$ if $\tilde r(t)>\tau$ and $s(t)$ normal; $c\gets\max(c-1,0)$ if $\tilde r(t)\le\tau$ and $s(t)$ normal
 \State \textbf{if} $c\ge 72$ \textbf{then} raise alarm; rank plant areas by channel error ratio
 \EndFor
 \end{algorithmic}
@@ -175,7 +175,7 @@ For maintenance planning the normalised, smoothed score is mapped to a health in
 \begin{equation}
 \mathrm{HI}(t)=\Big(1+\frac{\max(0,\tilde r(t)-q_{50})}{q_{99}-q_{50}}\Big)^{-1},
 \end{equation}
-with $q_{50}$ and $q_{99}$ the median and 99th percentile of $\tilde r$ on $\mathcal{C}_b$: HI is 1 for typical healthy behaviour, 0.5 exactly at the alarm threshold and falls towards 0 beyond it. A least-squares line through the last 24~h of HI gives a slope $s$; if $s<0$, the time to a floor of 0.2 is $(\mathrm{HI}-0.2)/(-s)$, capped at 720~h, and $s\pm1.96\,\mathrm{SE}(s)$ gives a 95\% band. A work order is suggested when an alarm is active and this time falls below a gate $G\in\{72,168,336\}$~h. With no replacement dates in the data, $G$ cannot be fitted, so all three are reported. To probe sensor faults, every prediction window is corrupted with Gaussian noise ($\sigma=0.1$--$0.5$) or 5--20\% of entries set to the training median, and rescored without retraining or moving the threshold.
+with $q_{50}$ and $q_{99}$ the median and 99th percentile of $\tilde r$ on $\mathcal{C}_b$: HI is 1 for typical healthy behaviour, 0.5 exactly at the alarm threshold and falls towards 0 beyond it. A least-squares line through the last 24~h of HI gives a slope $s$; if $s<0$, the time to a floor of 0.2 is $(\mathrm{HI}-0.2)/(-s)$, capped at 720~h, and $s\pm1.96\,\mathrm{SE}(s)$ gives a 95\% band. A work order is suggested when an alarm is active and this time falls below a gate $G\in\{72,168,336\}$~h. With no replacement dates in the data, $G$ cannot be fitted, so all three are reported. To probe sensor faults, every prediction window is corrupted with Gaussian noise ($\sigma=0.1$--$0.5$) or 5--20\% of entries set to the training median, and rescored without retraining or moving the threshold; operating conditions are left clean.
 
 \section{Results}
 \subsection{Detection on 95 datasets}
@@ -198,7 +198,7 @@ AE, no idle filter & + both & 0.592 & 0.26 & 0.956 & 16 & 8\\
 AE, sigmoid out & raw & 0.498 & 0.13 & 0.970 & 6 & 10\\
 Conditional AE & raw & 0.590$\pm$.007 & 0.23 & 0.964 & 11.7 & 3.7\\
 Conditional AE & + both & 0.593$\pm$.009 & 0.26 & 0.956 & 16.0 & 8.0\\
-LSTM AE & raw & 0.531$\pm$.000 & 0.19 & 0.978 & 5.0 & 3.0\\
+LSTM AE & raw & 0.531$\pm$<.001 & 0.19 & 0.978 & 5.0 & 3.0\\
 LSTM AE & + both & 0.564$\pm$.003 & 0.23 & 0.966 & 10.3 & 5.0\\
 PCA & raw & 0.595 & 0.25 & 0.963 & 10 & 2\\
 PCA & + both & 0.598 & 0.29 & 0.936 & 16 & 9\\
@@ -295,7 +295,7 @@ Corrupting the prediction window without moving the threshold mainly raises fals
 \textit{What the data cannot show.} Ten-minute averages smooth away short electrical and communication faults, so no detector change recovers them. \textit{Life figure.} The time to threshold is a short-horizon slope to a chosen floor; the benchmark publishes no replacement times, so no remaining-useful-life error can be computed. \textit{Labels.} Plant areas were assigned to brief operator notes by the authors, and several faults involve more than one area. \textit{Scope.} One architecture per family was tested with fixed hyperparameters; per-farm architecture tuning is left open.
 
 \section{Conclusion}
-On all 95 CARE-to-Compare datasets, with time-ordered splits and settings fixed in advance, a dense autoencoder reaches a CARE score of 0.584. Condition normalisation and smoothing move it by less than the variation between datasets, PCA and a conditional autoencoder do as well, an LSTM autoencoder does worse, and a sigmoid output does markedly worse. Normalisation lowers false alarms but hides load-dependent fault signal, and pays off for weak detectors such as Isolation Forest. Thresholds tuned leave-one-farm-out raise every detector to about 0.60, which explains only part of the gap to a per-farm tuned result. Attribution beats a random ranking and a model-free ranking but only matches the commonest-area prior. Next steps are per-farm architecture search under the same leakage rules, fitting the work-order gate to a maintenance log, and transferring the condition model between turbines \cite{r18}.
+On all 95 CARE-to-Compare datasets, with time-ordered splits and settings fixed in advance, a dense autoencoder reaches a CARE score of 0.584. Condition normalisation and smoothing move it by less than the variation between datasets, PCA and a conditional autoencoder do as well, an LSTM autoencoder does worse, and a sigmoid output does markedly worse. Normalisation lowers false alarms but hides load-dependent fault signal, and pays off for weak detectors such as Isolation Forest. Thresholds tuned leave-one-farm-out raise each detector's full pipeline to 0.58--0.61, which explains only part of the gap to a per-farm tuned result. Attribution beats a random ranking and a model-free ranking but only matches the commonest-area prior. Next steps are per-farm architecture search under the same leakage rules, fitting the work-order gate to a maintenance log, and transferring the condition model between turbines \cite{r18}.
 
 \begin{thebibliography}{28}
 \bibitem{r20} J. Tautz-Weinert and S. J. Watson, ``Using SCADA data for wind turbine condition monitoring -- a review,'' \textit{IET Renew. Power Gener.}, vol. 11, no. 4, pp. 382--394, 2017.

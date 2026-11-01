@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this code or its results, please cite the paper."
+title: "A Leakage-Safe Autoencoder Framework for Early Fault Detection and Subsystem Attribution in Wind Turbines Using SCADA Data"
+authors:
+  - family-names: Ananth
+    given-names: N
+    affiliation: "RV College of Engineering, Bengaluru"
+  - family-names: Kalirajan
+    given-names: Roshan
+    affiliation: "RV College of Engineering, Bengaluru"
+  - family-names: "B N"
+    given-names: Samarth
+    affiliation: "RV College of Engineering, Bengaluru"
+  - family-names: Gadad
+    given-names: Veena
+    affiliation: "RV College of Engineering, Bengaluru"
+repository-code: "https://github.com/bnsama29-cloud/ML-based-Digital-Twin-for-Predictive-maintenance-of-Offshore-Wind-Turbines"
+keywords: [wind turbine, SCADA, autoencoder, fault detection, CARE score, predictive maintenance]
