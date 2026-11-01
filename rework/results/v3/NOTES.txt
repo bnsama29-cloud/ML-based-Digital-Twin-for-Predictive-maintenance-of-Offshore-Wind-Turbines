@@ -1,4 +1,0 @@
-Final run (v3): run A (results_v3.zip) + run B (results_v3_lstm.zip), merged with
-merge_results.py. Case-40 figures in rework/paper/figures were redrawn with a local CPU rerun
-of analyze_case.py (date axes fixed); its first alarm is 46.0 h after the window start vs
-45.2 h in the Kaggle run, whose numbers the paper reports.

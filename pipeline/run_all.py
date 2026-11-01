@@ -1,5 +1,5 @@
 """Everything in one go, on one Kaggle account (v3, the final run):
-benchmark on all 95 datasets (farms A, B, C) -> two case studies -> paper tables -> zip.
+benchmark on all 95 datasets (farms A, B, C) -> two case studies -> result tables -> zip.
 
     python run_all.py --data-dir /tmp/care --out /tmp/results --zip /kaggle/working/results_v3.zip
 
@@ -57,7 +57,7 @@ def main():
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     bench = os.path.join(a.out, "benchmark")
-    tables = os.path.join(a.out, "paper_tables")
+    tables = os.path.join(a.out, "tables")
     failures = []
     t0 = time.time()
     try:
@@ -75,7 +75,7 @@ def main():
                      [os.path.join(here, "analyze_case.py"), "--data-dir", a.data_dir,
                       "--farm", farm, "--event", str(eid), "--cross", str(cross),
                       "--epochs", str(a.epochs), "--out", case], failures)
-        step("paper tables", [os.path.join(here, "merge_results.py"), "--inputs", bench,
+        step("result tables", [os.path.join(here, "merge_results.py"), "--inputs", bench,
                               "--out", tables], failures)
     finally:
         with open(os.path.join(a.out, "RUN_INFO.txt"), "w") as f:

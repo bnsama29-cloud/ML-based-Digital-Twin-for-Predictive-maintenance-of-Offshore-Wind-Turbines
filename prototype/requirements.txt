@@ -1,0 +1,13 @@
+# First prototype (kept for history; superseded by ../pipeline)
+pandas
+numpy
+scikit-learn
+tensorflow
+joblib
+matplotlib
+plotly
+streamlit
+fastapi
+pydantic
+uvicorn
+paho-mqtt

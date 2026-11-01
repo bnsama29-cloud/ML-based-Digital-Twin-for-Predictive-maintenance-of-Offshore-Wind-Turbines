@@ -1,7 +1,7 @@
-"""Turn the stored scores into the paper tables: CARE score, detection, attribution,
+"""Turn the stored scores into the result tables: CARE score, detection, attribution,
 leave-one-farm-out threshold tuning, paired bootstrap, robustness, sigmoid-head ablation.
 
-    python merge_results.py --inputs results/benchmark --out results/paper_tables
+    python pipeline/merge_results.py --inputs out/benchmark [out_b/benchmark] --out results/tables
 """
 import argparse
 import glob
@@ -290,7 +290,7 @@ def latex_care(t: pd.DataFrame) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--inputs", nargs="+", required=True)
-    ap.add_argument("--out", default="paper_tables")
+    ap.add_argument("--out", default="tables")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     raw = load_raw(a.inputs)

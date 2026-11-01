@@ -1,90 +1,125 @@
-# A leakage-safe autoencoder framework for early fault detection and subsystem attribution in wind turbines
+# Predictive maintenance of wind turbines from SCADA data
 
-Code and results for the paper *A Leakage-Safe Autoencoder Framework for Early Fault
-Detection and Subsystem Attribution in Wind Turbines Using SCADA Data* (RV College of
-Engineering, Bengaluru).
+Early fault detection, fault attribution and maintenance timing for wind turbines, built on
+the public **[CARE-to-Compare](https://zenodo.org/records/15846963)** benchmark
+(3 wind farms, 36 turbines, 95 datasets, 45 labelled faults, 50 normal periods),
+with a Unity scene that replays the turbine's measured state and the model's warnings.
 
-The study evaluates fault detectors on **all 95 datasets of the
-[CARE-to-Compare](https://zenodo.org/records/15846963) benchmark** (3 farms, 45 faults,
-50 normal periods) with time-ordered splits, settings fixed before testing, three seeds,
-and the benchmark's CARE score. It covers:
+![Framework](figures/framework.png)
 
-- detectors: dense autoencoder (AE), conditional AE, LSTM AE, AE with a sigmoid output,
-  PCA, Isolation Forest, 3σ fraction
-- post-processing: condition normalisation (remove the error that wind, power, rotor speed
-  and ambient temperature explain), causal smoothing, both — each ablated
-- leave-one-farm-out threshold tuning, a paired bootstrap over datasets, robustness to
-  noise and missing data, compute time
-- plant-area attribution checked against operator fault notes, with random, majority-class
-  and model-free floors
-- a causal health index with a time-to-threshold band, a work-order gate study, and a
-  Unity playback of measured values
+## What the project does
 
-## Results (final run, v3)
+1. **Learns normal behaviour.** Detectors are trained only on healthy rows from each
+   turbine's training year: a dense autoencoder (AE), a conditional AE that sees the
+   operating conditions, an LSTM AE over 1-hour windows, PCA, Isolation Forest and a
+   3σ rule.
+2. **Removes what the weather explains.** Reconstruction error grows with wind and load even
+   on a healthy turbine. A gradient-boosting model, fitted on a held-out slice, predicts the
+   expected error from wind speed, power, rotor speed and ambient temperature, and only the
+   excess is scored (*condition normalisation*). A causal 6-hour median then removes spikes.
+3. **Raises alarms the way operators would.** A row is flagged above the 99th percentile of
+   held-out healthy scores; an alarm needs 12 hours of net flagged behaviour (the benchmark's
+   criticality counter).
+4. **Says where to look.** Every sensor is mapped to one of ten plant areas (pitch/hub, yaw,
+   hydraulics, cooling, gearbox, generator, drive train, nacelle/tower, electrical,
+   environment), and areas are ranked by how much worse the AE reconstructs them during the
+   fault than when healthy.
+5. **Suggests when to act.** A causal health index (1 = healthy, 0.5 = alarm threshold) and
+   its recent slope give a time to a failure floor with a 95 % band; a work order is
+   suggested when that time falls below a gate of 72, 168 or 336 hours.
+6. **Shows it.** Measured wind speed, rotor speed, power and temperatures, with the score,
+   alarm, health index and time-to-threshold, are exported per time step for a Unity
+   playback of the turbine.
 
-| Detector | Post-processing | CARE, fixed settings | CARE, tuned leave-one-farm-out | Faults detected / 45 | Normal periods with alarm / 50 |
+Everything is **leakage-safe**: splits are ordered in time, every statistic is fitted on
+the training year only, the prediction window is never seen before scoring, and all
+settings were fixed before testing.
+
+## Results on all 95 datasets
+
+| Detector | Post-processing | CARE (fixed settings) | CARE (tuned on other farms) | Faults detected / 45 | Normal periods with alarm / 50 |
 |---|---|---|---|---|---|
-| AE | raw | 0.584 ± 0.002 | 0.607 | 11.3 | 5.0 |
-| AE | + normalisation + smoothing | 0.592 ± 0.004 | 0.602 | 15.3 | 7.0 |
-| Conditional AE | raw | 0.590 ± 0.007 | 0.603 | 11.7 | 3.7 |
-| LSTM AE | raw | 0.531 ± 0.000 | 0.601 | 5.0 | 3.0 |
-| AE, sigmoid output | raw | 0.498 | – | 6 | 10 |
-| PCA | + normalisation + smoothing | 0.598 | 0.611 | 16 | 9 |
-| Isolation Forest | raw → + both | 0.471 → 0.518 | 0.527 → 0.582 | 2.3 → 9.3 | 4.3 → 8.3 |
+| AE | none | 0.584 ± 0.002 | 0.607 | 11.3 | 5.0 |
+| AE | normalisation + smoothing | 0.592 ± 0.004 | 0.602 | 15.3 | 7.0 |
+| Conditional AE | none | 0.590 ± 0.007 | 0.603 | 11.7 | 3.7 |
+| LSTM AE | none | 0.531 ± <0.001 | 0.601 | 5.0 | 3.0 |
+| AE, sigmoid output | none | 0.498 | – | 6 | 10 |
+| PCA | normalisation + smoothing | 0.598 | 0.611 | 16 | 9 |
+| Isolation Forest | none → normalisation + smoothing | 0.471 → 0.518 | 0.527 → 0.582 | 2.3 → 9.3 | 4.3 → 8.3 |
 
-Reference values from the benchmark paper: per-farm tuned AE 0.66, random 0.5.
+CARE is the benchmark's score (coverage, earliness, event reliability and accuracy on normal
+periods; 0.5 = random predictions; the benchmark's per-farm tuned AE reports 0.66).
+± is the s.d. over three seeds.
 
-- A paired bootstrap over datasets finds no significant difference between the AE
-  post-processing variants, or between AE, conditional AE and PCA. The LSTM AE is lower
-  (−0.054, 95 % CI −0.092 to −0.019); the sigmoid output costs 0.086 (0.025 to 0.146).
-  Normalisation + smoothing helps Isolation Forest (+0.047, 0.003 to 0.091).
-- Tuning thresholds on two farms and testing on the third adds 0–0.07; even tuning on
-  the test data gives at most 0.619, so most of the gap to 0.66 is not threshold choice.
-- Attribution top-1: 0.37 (AE vote) vs 0.22 (raw z-scores), 0.12 (random), 0.30 (always the
-  commonest area).
-- Case studies: generator-bearing fault (dataset 40) detected ~29 days before the end of
-  its window with the generator ranked first; cooling-valve fault (dataset 44) missed,
-  cooling still ranked first.
+- **Post-processing:** a paired bootstrap over datasets finds no significant difference
+  between the AE variants, or between the AE, the conditional AE and PCA. Condition
+  normalisation cuts false alarms but also hides load-dependent fault signal; it helps the
+  weaker Isolation Forest significantly (+0.047, 95 % CI 0.003 to 0.091).
+- **Architecture:** the LSTM AE is lower (−0.054, CI −0.092 to −0.019), and a sigmoid output
+  layer costs 0.086 (CI 0.025 to 0.146) because it cannot reproduce negative standardised values.
+- **Tuning:** choosing threshold and alarm counter on two farms and testing on the third adds
+  up to 0.07; even tuning on the test data reaches only 0.619, so most of the gap to 0.66 is
+  not threshold choice.
+- **Attribution:** the right plant area is ranked first for 37 % of 40 labelled faults
+  (random 12 %, raw z-scores 22 %, always naming the commonest area 30 %).
+- **Case studies:** a generator-bearing failure (dataset 40) raised its first alarm about
+  29 days before the end of its fault window, with the generator ranked first; a cooling-water
+  valve fault (dataset 44) was missed, although the cooling area still ranked first.
+- **Cost:** every detector trains in under 25 s per turbine-year on a T4 GPU and scores
+  1000 rows in at most 10 ms.
 
-All tables: [`rework/results/v3/`](rework/results/v3) (v2 kept for reference).
+Full tables: [`results/`](results). Figures: [`figures/`](figures).
 
-## Layout
+<p>
+<img src="figures/fig_care.png" width="48%"> <img src="figures/fig_robust.png" width="48%">
+</p>
+
+## Repository layout
 
 ```
-rework/            the study (use this)
-  wtpm_lib.py        data access, preprocessing, models, CARE score, attribution
-  run_benchmark.py   all 95 datasets -> stored scores
-  analyze_case.py    one-dataset case study (health index, time to threshold, gate, RCA)
-  merge_results.py   stored scores -> paper tables
+pipeline/          the validated pipeline
+  wtpm_lib.py        data access, leakage-safe preprocessing, detectors, condition
+                     normalisation, CARE score, attribution, tuning helpers
+  run_benchmark.py   all 95 datasets -> stored row-level scores (resumable, time-budgeted)
+  analyze_case.py    one dataset: health index, time to threshold, gate study, attribution,
+                     temperature model and Unity export (farm C)
+  merge_results.py   stored scores -> result tables (merges run A and run B)
+  make_figures.py    summary figures from the result tables
   run_all.py         everything in one go, ends with a zip
-  tests/             pytest suite
-  paper/main.tex     IEEE conference paper (make_figures.py draws Fig. 1 and 2)
-  results/v3/        tables of the final run (results/v2: earlier run)
-src/, dashboard.py   first prototype (kept for history; not used by the paper)
+tests/             unit tests (39) for the library and the merge step
+results/           tables and case studies of the final run
+figures/           framework diagram, summary and case-study figures
+docs/kaggle.md     how to reproduce the full run on Kaggle
+prototype/         first semester prototype (kept for history; not used for results)
 ```
 
-## Run it
+## Reproduce
 
-On Kaggle: follow [`rework/KAGGLE.md`](rework/KAGGLE.md). It takes one notebook and one
-run, and the output is a single zip.
+On Kaggle (GPU, about 5 hours): follow [`docs/kaggle.md`](docs/kaggle.md).
 
-Locally (downloads only the files it needs from Zenodo, by HTTP range requests):
+Locally (downloads only the needed files from Zenodo with HTTP range requests):
 
 ```bash
-cd rework
 pip install -r requirements.txt
 python -m pytest -q tests
-python run_all.py --data-dir data --out out --zip out/results_v3.zip --events 7 21 40 --epochs 2   # smoke test
-python run_all.py --data-dir data --out out --zip out/results_v3.zip                               # run A
-python run_all.py --detectors lstm --data-dir data --out out_b --zip out/results_v3_lstm.zip       # run B
-python merge_results.py --inputs out/benchmark out_b/benchmark --out tables                      # merge
+# quick check on three datasets, 2 epochs
+python pipeline/run_all.py --data-dir data --out out --zip out/results.zip --events 7 21 40 --epochs 2
+# full run A and run B, then merge and draw figures
+python pipeline/run_all.py --data-dir data --out out --zip out/results_v3.zip
+python pipeline/run_all.py --detectors lstm --data-dir data --out out_b --zip out/results_v3_lstm.zip
+python pipeline/merge_results.py --inputs out/benchmark out_b/benchmark --out results/tables
+python pipeline/make_figures.py --tables results/tables --out figures
 ```
 
-## Data and licence of the data
+## Data
 
 CARE-to-Compare by Gück, Roelofs and Faulstich (Fraunhofer IEE), *Data* 9(12):138, 2024,
-distributed via Zenodo under its own licence. The data are not copied into this repository.
+distributed via [Zenodo](https://zenodo.org/records/15846963) under its own licence.
+The data are not copied into this repository. The CARE score follows the dataset paper
+and, where it leaves a choice open, the authors' reference implementation
+[EnergyFaultDetector](https://aefdi.github.io/EnergyFaultDetector).
 
 ## Authors
 
-N Ananth, Roshan Kalirajan, Samarth B N, Veena Gadad (RV College of Engineering, Bengaluru).
+N Ananth, Roshan Kalirajan, Samarth B N and Veena Gadad, RV College of Engineering,
+Bengaluru. See [`CITATION.cff`](CITATION.cff) to cite this work.

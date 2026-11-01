@@ -1,8 +1,9 @@
-"""Shared code for the reworked wind-turbine predictive-maintenance study.
+"""Core library of the leakage-safe wind-turbine fault-detection pipeline.
 
 Data: CARE-to-Compare (Zenodo record 15846963), wind farms A, B and C (95 datasets).
-Every number reported in the paper must come from functions in this file or the
-scripts that import it.
+Data access, preprocessing with leakage rules, detectors, condition normalisation,
+CARE scoring, attribution and tuning helpers. Every reported number comes from functions
+in this file or from the scripts in this folder that import it.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ ALARM_STEPS = 72                # 72 x 10 min = 12 h, CARE / EnergyFaultDetector
 VAL_FRACTION = 0.15             # last 15 % of normal training rows -> validation
 THRESHOLD_Q = 0.99              # fixed before looking at any test result
 SMOOTH_ROWS = 36                # causal rolling median, 6 h
-FILTER_WIND = (5.0, 20.0)       # CARE paper training filter: wind in operating range ...
+FILTER_WIND = (5.0, 20.0)       # idle filter (idea from the CARE paper): wind in operating range ...
 FILTER_POWER_FRAC = 0.02        # ... while power is below 2 % of the training 99th percentile
 BETA = 0.5                      # CARE score uses F_0.5
 EARLINESS_FLAT = 0.25           # earliness weight 1 for the first quarter of the window
@@ -433,7 +434,7 @@ def earliness_weights(n: int) -> np.ndarray:
 def care_event(pred: np.ndarray, normal: np.ndarray, in_window: np.ndarray, label: str,
                steps: int | None = None) -> dict:
     """Score one dataset's prediction window with the CARE definitions (Gueck et al. 2024),
-    following the reference implementation (EnergyFaultDetector) where the paper is open:
+    following the reference implementation (EnergyFaultDetector) where the paper leaves it open:
     the criticality is counted up to the end of the event window, earliness weight is 1 for
     the first quarter of the window and falls linearly to 0, abnormal-status rows are left out
     of coverage and accuracy."""

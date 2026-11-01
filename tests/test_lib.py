@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline"))
 import wtpm_lib as L  # noqa: E402
 from analyze_case import time_to_threshold  # noqa: E402
 
