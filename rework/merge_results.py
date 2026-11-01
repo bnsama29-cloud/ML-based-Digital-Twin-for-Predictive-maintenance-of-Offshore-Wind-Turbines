@@ -14,21 +14,34 @@ import pandas as pd
 import wtpm_lib as L
 
 BASE_LABEL = {"ae": "Autoencoder", "ae_nofilter": "AE, no training filter",
-              "cae": "Conditional AE", "ae_sigmoid": "AE, sigmoid output",
+              "cae": "Conditional AE", "ae_sigmoid": "AE, sigmoid output", "lstm": "LSTM AE",
               "iforest": "Isolation Forest", "pca": "PCA", "three_sigma": "3-sigma fraction"}
 VAR_LABEL = {"raw": "raw", "smooth": "+ smoothing", "cn": "+ condition norm.",
              "cn_smooth": "+ cond. norm. + smoothing"}
 
 
 def load_raw(inputs):
-    """[(meta, arrays)] for every finished dataset."""
-    out = []
+    """[(meta, arrays)] for every finished dataset. Several input folders (run A + run B)
+    are combined per dataset; the row arrays must agree, which a shared preprocessing
+    guarantees, and this is checked."""
+    by = {}
     for d in inputs:
         for js in sorted(glob.glob(os.path.join(d, "scores", "*.json"))):
             npz = js[:-5] + ".npz"
-            if os.path.exists(npz):
-                out.append((json.load(open(js)), dict(np.load(npz))))
-    return out
+            if not os.path.exists(npz):
+                continue
+            meta, data = json.load(open(js)), dict(np.load(npz))
+            key = (meta["farm"], meta["event_id"])
+            if key not in by:
+                by[key] = (meta, data)
+                continue
+            m0, d0 = by[key]
+            for k in ("ids", "eval_normal", "in_window"):
+                if not np.array_equal(d0[k], data[k]):
+                    raise ValueError(f"rows of dataset {key} differ between input folders")
+            m0["thresholds"].update(meta["thresholds"])
+            d0.update({k: v for k, v in data.items() if k not in d0})
+    return [by[k] for k in sorted(by)]
 
 
 def load_events(raw):
@@ -138,7 +151,7 @@ def keys_of(raw, method, var):
     return sorted(k for k in keys if k.endswith("|" + var) and L.split_key(k.split("|")[0])[0] == method)
 
 
-MAIN_CONFIGS = [(m, v) for m in ("ae", "cae", "pca", "iforest") for v in L.VARIANTS]
+MAIN_CONFIGS = [(m, v) for m in ("ae", "cae", "lstm", "pca", "iforest") for v in L.VARIANTS]
 
 
 def lofo_table(raw):
@@ -211,7 +224,8 @@ def bootstrap_table(raw, pairs, n_boot=1000, seed=0):
 PAIRS = [("ae|smooth", "ae|raw"), ("ae|cn", "ae|raw"), ("ae|cn_smooth", "ae|smooth"),
          ("ae|cn_smooth", "ae|raw"), ("cae|raw", "ae|raw"), ("cae|smooth", "ae|cn_smooth"),
          ("ae|smooth", "pca|smooth"), ("ae|cn_smooth", "pca|cn_smooth"),
-         ("iforest|cn_smooth", "iforest|raw"), ("ae|raw", "ae_sigmoid|raw")]
+         ("iforest|cn_smooth", "iforest|raw"), ("ae|raw", "ae_sigmoid|raw"),
+         ("lstm|raw", "ae|raw"), ("lstm|smooth", "ae|smooth"), ("lstm|cn_smooth", "ae|cn_smooth")]
 
 
 def robustness_table(raw):
@@ -238,7 +252,7 @@ def sigmoid_table(logs: pd.DataFrame) -> pd.DataFrame:
     if logs.empty:
         return logs
     best = logs.groupby(["event_id", "base"])["val"].min().unstack()
-    cols = [c for c in ("ae_s0", "ae_sigmoid_s0", "cae_s0") if c in best]
+    cols = [c for c in ("ae_s0", "ae_sigmoid_s0", "cae_s0", "lstm_s0") if c in best]
     return best[cols].describe().T.reset_index().rename(columns={"index": "base"})
 
 
@@ -308,6 +322,13 @@ def main():
             continue
         t.to_csv(os.path.join(a.out, f"{name}.csv"), index=False)
         print(f"\n== {name} ==\n" + t.round(3).to_string(index=False))
+
+    tim = [f for d in a.inputs for f in glob.glob(os.path.join(d, "timing.csv"))]
+    if tim:
+        t = pd.concat([pd.read_csv(f) for f in tim])
+        t = t.groupby(["farm", "detector"])[["fit_s", "score_s_per_1k"]].median().reset_index()
+        t.to_csv(os.path.join(a.out, "timing.csv"), index=False)
+        print("\n== median compute time per dataset ==\n" + t.round(3).to_string(index=False))
 
     logs = [f for d in a.inputs for f in glob.glob(os.path.join(d, "trainlog.csv"))]
     if logs:

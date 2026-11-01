@@ -52,6 +52,8 @@ def main():
                     help="stop starting new datasets after this many hours (Kaggle stops at 12)")
     ap.add_argument("--events", type=int, nargs="*", help="test on a few event ids only")
     ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument("--detectors", choices=["main", "lstm"], default="main",
+                    help="main = run A; lstm = run B (LSTM AE + timing, no case studies)")
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     bench = os.path.join(a.out, "benchmark")
@@ -62,8 +64,9 @@ def main():
         extra = ["--events", *map(str, a.events)] if a.events else []
         step("benchmark (95 datasets)",
              [os.path.join(here, "run_benchmark.py"), "--data-dir", a.data_dir, "--out", bench,
-              "--budget-h", str(a.budget_h), "--epochs", str(a.epochs), *extra], failures)
-        for farm, eid, cross in CASES:
+              "--budget-h", str(a.budget_h), "--epochs", str(a.epochs),
+              "--detectors", a.detectors, *extra], failures)
+        for farm, eid, cross in (CASES if a.detectors == "main" else []):
             if a.events and eid not in a.events:
                 continue
             case = os.path.join(a.out, f"case_{eid}")

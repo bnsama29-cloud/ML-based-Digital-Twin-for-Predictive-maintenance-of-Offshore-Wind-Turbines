@@ -279,3 +279,35 @@ def test_lofo_select_never_uses_the_held_out_farm():
     assert chosen["C"] == 0.9            # chosen on A+B, even though 0.99 would win on C
     assert chosen["A"] == 0.9 and chosen["B"] == 0.9
     assert set(sel["heldout"]) == {"A", "B", "C"}
+
+
+# ----------------------------------------------------------------- run B additions
+
+def test_lstm_autoencoder_scores_every_row_causally():
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(300, 4)).astype(np.float32)
+    score, log = L.train_lstm_autoencoder(X, np.arange(200), np.arange(200, 250), epochs=2,
+                                          hidden=8)
+    assert score.shape == (300,) and np.isfinite(score).all() and len(log) == 2
+    X2 = X.copy()
+    X2[280:] += 50.0                                      # change only the future
+    s2, _ = L.train_lstm_autoencoder(X2, np.arange(200), np.arange(200, 250), epochs=2,
+                                     hidden=8)
+    assert np.allclose(score[:280], s2[:280], atol=1e-5)  # earlier scores unaffected
+    assert s2[285] > score[285]
+
+
+def test_load_raw_combines_run_a_and_run_b(tmp_path):
+    import json
+    from merge_results import load_raw
+    rows = dict(ids=np.arange(5), eval_normal=np.ones(5, bool), in_window=np.zeros(5, bool))
+    for run, key in (("a", "ae_s0|raw"), ("b", "lstm_s0|raw")):
+        d = tmp_path / run / "scores"
+        d.mkdir(parents=True)
+        json.dump(dict(event_id=7, farm="B", label="normal", thresholds={key: 1.0}),
+                  open(d / "B_7.json", "w"))
+        np.savez(d / "B_7.npz", **rows, **{key: np.zeros(5)})
+    raw = load_raw([str(tmp_path / "a"), str(tmp_path / "b")])
+    assert len(raw) == 1
+    meta, data = raw[0]
+    assert set(meta["thresholds"]) == {"ae_s0|raw", "lstm_s0|raw"} and "lstm_s0|raw" in data

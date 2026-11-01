@@ -636,3 +636,82 @@ def lofo_select(table: pd.DataFrame, farms=FARMS) -> pd.DataFrame:
             out.append(r["events"].assign(heldout=f, q=best[0], steps=best[1], seed=r["seed"],
                                           train_care=best_care))
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+
+# ------------------------------------------------------- run B: LSTM autoencoder
+
+LSTM_WINDOW = 6        # 1 h of 10-min rows, causal (the window ends at the scored row)
+
+
+def train_lstm_autoencoder(X, fit_idx, val_idx, seed=0, window=LSTM_WINDOW, hidden=64,
+                           epochs=40, batch=256, lr=1e-3, patience=5, device=None):
+    """Sequence AE: an LSTM encodes the last `window` rows, its final state is repeated and a
+    second LSTM decodes it back to the window. Row t is scored by the mean squared error of
+    the window that ends at t (rows before the start repeat the first row), so the score
+    never looks ahead. Trained on windows that end on fit rows; early stopping on windows
+    that end on validation rows. Returns (score over all rows, training log)."""
+    import torch
+    from torch import nn
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    n, d = X.shape
+
+    class SeqAE(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.enc = nn.LSTM(d, hidden, batch_first=True)
+            self.dec = nn.LSTM(hidden, hidden, batch_first=True)
+            self.out = nn.Linear(hidden, d)
+
+        def forward(self, x):
+            _, (h, _) = self.enc(x)
+            z = h[-1].unsqueeze(1).repeat(1, x.shape[1], 1)
+            y, _ = self.dec(z)
+            return self.out(y)
+
+    model = SeqAE().to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    xt = torch.from_numpy(X).to(device)
+    offs = torch.arange(-window + 1, 1, device=device)
+
+    def windows(ends):
+        idx = (ends.unsqueeze(1) + offs).clamp(min=0)
+        return xt[idx]
+
+    fit_e = torch.from_numpy(np.asarray(fit_idx)).to(device)
+    val_e = torch.from_numpy(np.asarray(val_idx)).to(device)
+    gen = torch.Generator(device="cpu").manual_seed(seed)
+
+    def mse_of(ends):
+        out = []
+        model.eval()
+        with torch.no_grad():
+            for i in range(0, len(ends), 4096):
+                w = windows(ends[i:i + 4096])
+                out.append(((model(w) - w) ** 2).mean(dim=(1, 2)).cpu().numpy())
+        return np.concatenate(out) if out else np.array([])
+
+    best, best_state, wait, log = math.inf, None, 0, []
+    for ep in range(epochs):
+        model.train()
+        perm = fit_e[torch.randperm(len(fit_e), generator=gen).to(device)]
+        tot = 0.0
+        for i in range(0, len(perm), batch):
+            w = windows(perm[i:i + batch])
+            loss = ((model(w) - w) ** 2).mean()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(w)
+        vl = float(mse_of(val_e).mean())
+        log.append((ep, tot / len(fit_e), vl))
+        if vl < best - 1e-6:
+            best, wait = vl, 0
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        else:
+            wait += 1
+            if wait >= patience:
+                break
+    model.load_state_dict(best_state)
+    return mse_of(torch.arange(n, device=device)), log

@@ -28,6 +28,70 @@ ROBUST_BASES = ("ae_s0", "pca")
 ROBUST_VARIANTS = ("raw", "smooth", "cn_smooth")
 
 
+def run_dataset_lstm(eid, farm, ev, feats, a):
+    """Run B: LSTM autoencoder only (3 seeds), same preprocessing, splits and storage."""
+    df = L.load_dataset(eid, a.data_dir, farm)
+    prep = L.prepare(df, feats, farm=farm, train_filter=True)
+    bases, logs = {}, []
+    X = prep.X
+    for seed in AE_SEEDS:
+        score, log = L.train_lstm_autoencoder(X, prep.fit_idx, prep.val_idx, seed=seed,
+                                              epochs=a.epochs)
+        bases[f"lstm_s{seed}"] = (score, prep)
+        logs += [dict(event_id=eid, base=f"lstm_s{seed}", epoch=e, train=t, val=v)
+                 for e, t, v in log]
+    timing = time_detectors(X, prep, a.epochs)
+    timing = [dict(event_id=eid, farm=farm, n_features=X.shape[1], **t) for t in timing]
+    return store_scores(df, prep, ev, eid, farm, bases), logs, timing
+
+
+def time_detectors(X, prep, epochs):
+    """Wall-clock fit time and scoring time per 1000 rows of every detector (seed 0)."""
+    def clock(fn):
+        t0 = time.perf_counter()
+        out = fn()
+        return out, time.perf_counter() - t0
+
+    rows = []
+    Xf, Xv = X[prep.fit_idx], X[prep.val_idx]
+    (fn, _), t_fit = clock(lambda: L.train_autoencoder(Xf, Xv, seed=0, epochs=epochs))
+    _, t_inf = clock(lambda: fn(X))
+    rows.append(dict(detector="ae", fit_s=t_fit, score_s_per_1k=1000 * t_inf / len(X)))
+    _, t_fit = clock(lambda: L.train_lstm_autoencoder(X, prep.fit_idx, prep.val_idx, seed=0,
+                                                      epochs=epochs))
+    rows.append(dict(detector="lstm", fit_s=t_fit, score_s_per_1k=np.nan))
+    from sklearn.decomposition import PCA
+    from sklearn.ensemble import IsolationForest
+    for name, model in (("pca", PCA(n_components=0.95, svd_solver="full")),
+                        ("iforest", IsolationForest(n_estimators=200, random_state=0, n_jobs=-1))):
+        m, t_fit = clock(lambda: model.fit(Xf))
+        score = (lambda: m.inverse_transform(m.transform(X))) if name == "pca" \
+            else (lambda: m.score_samples(X))
+        _, t_inf = clock(score)
+        rows.append(dict(detector=name, fit_s=t_fit, score_s_per_1k=1000 * t_inf / len(X)))
+    _, t_inf = clock(lambda: L.score_three_sigma(X))
+    rows.append(dict(detector="three_sigma", fit_s=0.0, score_s_per_1k=1000 * t_inf / len(X)))
+    return rows
+
+
+def store_scores(df, prep, ev, eid, farm, bases):
+    pm = prep.pred_mask
+    ids = df["id"].to_numpy()
+    store = dict(ids=ids[pm], eval_normal=prep.eval_normal[pm],
+                 in_window=(ids[pm] >= ev["event_start_id"]) & (ids[pm] <= ev["event_end_id"]))
+    thresholds = {}
+    for base, (score, p) in bases.items():
+        for var, s in L.variants(score, p).items():
+            key = f"{base}|{var}"
+            store[key] = s[pm].astype(np.float32)
+            store[key + "@cal"] = s[p.cal_b].astype(np.float32)
+            thresholds[key] = float(np.quantile(s[p.cal_b], L.THRESHOLD_Q))
+    meta = dict(event_id=int(eid), farm=farm, label=ev["event_label"],
+                n_features=len(prep.columns), n_fit=int(len(prep.fit_idx)),
+                n_filtered=int(prep.n_filtered), thresholds=thresholds)
+    return store, meta
+
+
 def run_dataset(eid, farm, ev, feats, a):
     df = L.load_dataset(eid, a.data_dir, farm)
     prep = L.prepare(df, feats, farm=farm, train_filter=True)       # main pipeline
@@ -120,6 +184,8 @@ def main():
     ap.add_argument("--events", type=int, nargs="*", help="run only these event ids")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--keep-files", action="store_true", help="do not delete downloaded csv")
+    ap.add_argument("--detectors", choices=["main", "lstm"], default="main",
+                    help="main = run A (all v3 detectors); lstm = run B (LSTM autoencoder only)")
     ap.add_argument("--budget-h", type=float, default=0,
                     help="stop starting new datasets after this many hours (0 = no limit)")
     a = ap.parse_args()
@@ -142,21 +208,27 @@ def main():
             t0 = time.time()
             ev = events.loc[eid].copy()
             ev["event_id"] = eid
-            store, meta, logs, chans = run_dataset(eid, farm, ev, feats, a)
-            for path, rows in ((os.path.join(a.out, "trainlog.csv"), pd.DataFrame(logs)),
-                               (os.path.join(a.out, "channels.csv"),
-                                pd.concat(chans) if chans else pd.DataFrame())):
+            if a.detectors == "lstm":
+                (store, meta), logs, chans = run_dataset_lstm(eid, farm, ev, feats, a)
+            else:
+                store, meta, logs, chans = run_dataset(eid, farm, ev, feats, a)
+            if a.detectors == "lstm":
+                side = (os.path.join(a.out, "timing.csv"), pd.DataFrame(chans))
+            else:
+                side = (os.path.join(a.out, "channels.csv"),
+                        pd.concat(chans) if chans else pd.DataFrame())
+            for path, rows in ((os.path.join(a.out, "trainlog.csv"), pd.DataFrame(logs)), side):
                 if len(rows):
                     rows.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
             with open(os.path.join(sdir, f"{farm}_{eid}.json"), "w") as f:
                 json.dump(meta, f)
             np.savez_compressed(npz, **store)        # written last: marks the dataset done
-            crit = L.criticality(store["ae_s0|cn_smooth"] > meta["thresholds"]["ae_s0|cn_smooth"],
-                                 store["eval_normal"]).max()
+            k0 = "ae_s0|cn_smooth" if a.detectors == "main" else "lstm_s0|cn_smooth"
+            crit = L.criticality(store[k0] > meta["thresholds"][k0], store["eval_normal"]).max()
             print(f"farm {farm} event {eid} ({meta['label']}): {meta['n_features']} features, "
                   f"{meta['n_filtered']} idle rows filtered, max criticality {crit}, "
                   f"{time.time() - t0:.0f}s", flush=True)
-            if not a.keep_files and eid not in KEEP_ON_DISK:
+            if not a.keep_files and (a.detectors == "lstm" or eid not in KEEP_ON_DISK):
                 f = L.dataset_path(eid, a.data_dir, farm)
                 if os.path.exists(f):
                     os.remove(f)
