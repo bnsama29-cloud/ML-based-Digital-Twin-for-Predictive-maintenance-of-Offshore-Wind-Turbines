@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import wtpm_lib as L  # noqa: E402
-from analyze_44 import time_to_threshold  # noqa: E402
+from analyze_case import time_to_threshold  # noqa: E402
 
 
 def test_criticality_counts_up_down_and_freezes_on_abnormal_status():
@@ -204,3 +204,78 @@ def test_prepare_drops_counters_and_filters_idle_rows():
     assert "sensor_0_avg" not in p.columns
     assert p.n_filtered == 20 and not set(range(10, 30)) & set(p.fit_idx)
     assert len(p.cal_a) + len(p.cal_b) == len(p.val_idx)
+
+
+# ----------------------------------------------------------------- v3 additions
+
+def test_care_event_steps_override():
+    n = 200
+    win = np.r_[np.zeros(100, bool), np.ones(100, bool)]
+    pred = np.r_[np.zeros(100, bool), np.ones(50, bool), np.zeros(50, bool)]
+    assert not L.care_event(pred, np.ones(n, bool), win, "anomaly")["detected"]   # default 72
+    assert not L.care_event(pred, np.ones(n, bool), win, "anomaly", steps=60)["detected"]
+    assert L.care_event(pred, np.ones(n, bool), win, "anomaly", steps=36)["detected"]
+
+
+def test_split_key_handles_seedless_and_underscored_names():
+    assert L.split_key("ae_s2") == ("ae", 2)
+    assert L.split_key("ae_nofilter_s0") == ("ae_nofilter", 0)
+    assert L.split_key("iforest_s1") == ("iforest", 1)
+    assert L.split_key("three_sigma") == ("three_sigma", 0)
+    assert L.split_key("pca") == ("pca", 0)
+
+
+def test_corrupt_touches_only_the_given_rows():
+    X = np.ones((10, 4), np.float32)
+    fill = np.zeros(4, np.float32)
+    rows = np.arange(5, 10)
+    n = L.corrupt(X, rows, "noise", 0.5, fill)
+    assert (n[:5] == 1).all() and not np.allclose(n[5:], 1)
+    m = L.corrupt(X, rows, "missing", 1.0, fill)
+    assert (m[:5] == 1).all() and (m[5:] == 0).all()
+    assert (X == 1).all()                                  # input left unchanged
+    with pytest.raises(ValueError):
+        L.corrupt(X, rows, "spikes", 0.1, fill)
+
+
+def test_zscore_ratio_points_at_the_shifted_channel():
+    prep = _toy_prepared()
+    X = np.zeros((400, 3), np.float32) + 0.5
+    X[300:, 1] = 5.0
+    prep.X, prep.columns = X, ["a", "b", "c"]
+    ev = pd.Series(dict(event_start_id=300, event_end_id=399))
+    r = L.zscore_ratios(X, prep, ev)
+    assert np.argmax(r) == 1 and r[1] == pytest.approx(10.0, rel=1e-3)
+
+
+def test_conditional_autoencoder_trains_and_scores():
+    rng = np.random.default_rng(0)
+    U = rng.normal(size=(600, 2)).astype(np.float32)
+    X = np.column_stack([U[:, 0] * 2, U[:, 1] - U[:, 0], rng.normal(size=600)]).astype(np.float32)
+    fn, log = L.train_autoencoder(X[:400], X[400:500], epochs=3, U_fit=U[:400], U_val=U[400:500])
+    err = fn(X, U)
+    assert err.shape == X.shape and np.isfinite(err).all() and len(log) == 3
+    fn2, _ = L.train_autoencoder(X[:400], X[400:500], epochs=1, output="sigmoid")
+    assert fn2(X).shape == X.shape
+
+
+def _events(farm, score):
+    """One anomaly + one normal dataset whose detection depends on the alarm counter."""
+    a = L.care_event(np.r_[np.zeros(50, bool), np.ones(score, bool), np.zeros(100 - score, bool)],
+                     np.ones(150, bool), np.r_[np.zeros(50, bool), np.ones(100, bool)], "anomaly")
+    b = L.care_event(np.zeros(150, bool), np.ones(150, bool), np.zeros(150, bool), "normal")
+    return pd.DataFrame([dict(a, farm=farm), dict(b, farm=farm)])
+
+
+def test_lofo_select_never_uses_the_held_out_farm():
+    rows = []
+    for farm in "ABC":
+        for q in (0.9, 0.99):
+            # setting q=0.9 is good on A and B, setting q=0.99 is good only on C
+            good = (q == 0.9) != (farm == "C")
+            rows.append(dict(farm=farm, q=q, steps=72, seed=0, events=_events(farm, 90 if good else 10)))
+    sel = L.lofo_select(pd.DataFrame(rows))
+    chosen = sel.drop_duplicates("heldout").set_index("heldout")["q"]
+    assert chosen["C"] == 0.9            # chosen on A+B, even though 0.99 would win on C
+    assert chosen["A"] == 0.9 and chosen["B"] == 0.9
+    assert set(sel["heldout"]) == {"A", "B", "C"}

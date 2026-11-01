@@ -1,9 +1,14 @@
 """Benchmark on all 95 CARE-to-Compare datasets (farms A, B, C).
 
 For every dataset it trains the detectors, turns each raw score into four variants
-(raw, smoothed, condition-normalised, both) and stores the prediction-window scores row by
-row, so every metric (CARE score, detection counts, ...) is computed afterwards by
-merge_results.py without retraining.
+(raw, smoothed, condition-normalised, both) and stores, row by row, the prediction-window
+scores and the calibration-slice scores, so every metric (CARE score, detection counts,
+threshold tuning, ...) is computed afterwards by merge_results.py without retraining.
+
+v3 detectors: AE (3 seeds), AE without the training filter, conditional AE (3 seeds),
+AE with a sigmoid output head (seed 0), Isolation Forest (3 seeds), PCA, 3-sigma fraction.
+Robustness: the prediction window is corrupted (noise / missing values) and rescored by
+AE seed 0 and PCA without retraining.
 
 Normally called by run_all.py. Resumable: datasets with an existing scores file are skipped.
 """
@@ -18,7 +23,9 @@ import pandas as pd
 import wtpm_lib as L
 
 AE_SEEDS = (0, 1, 2)
-KEEP_ON_DISK = {44, 61}   # analyze_44.py needs these afterwards
+KEEP_ON_DISK = {44, 61, 40}   # case studies need these afterwards (ids unique across farms)
+ROBUST_BASES = ("ae_s0", "pca")
+ROBUST_VARIANTS = ("raw", "smooth", "cn_smooth")
 
 
 def run_dataset(eid, farm, ev, feats, a):
@@ -33,6 +40,8 @@ def run_dataset(eid, farm, ev, feats, a):
         errfn, log = L.train_autoencoder(X[prep.fit_idx], X[prep.val_idx], seed=seed,
                                          epochs=a.epochs)
         ch = errfn(X)
+        if seed == 0:
+            ae0_fn = errfn
         bases[f"ae_s{seed}"] = (ch.mean(axis=1), prep)
         logs += [dict(event_id=eid, base=f"ae_s{seed}", epoch=e, train=t, val=v) for e, t, v in log]
         if ev["event_label"] == "anomaly":
@@ -45,9 +54,34 @@ def run_dataset(eid, farm, ev, feats, a):
                                      seed=0, epochs=a.epochs)
     bases["ae_nofilter_s0"] = (errfn(prep_nf.X).mean(axis=1), prep_nf)
     logs += [dict(event_id=eid, base="ae_nofilter_s0", epoch=e, train=t, val=v) for e, t, v in log]
-    bases["iforest"] = (L.score_isolation_forest(X[prep.fit_idx], X), prep)
-    bases["pca"] = (L.score_pca(X[prep.fit_idx], X), prep)
+
+    # conditional AE: operating conditions go into encoder and decoder
+    U = L.scaled_conditions(prep)
+    for seed in AE_SEEDS:
+        cfn, log = L.train_autoencoder(X[prep.fit_idx], X[prep.val_idx], seed=seed,
+                                       epochs=a.epochs, U_fit=U[prep.fit_idx],
+                                       U_val=U[prep.val_idx])
+        bases[f"cae_s{seed}"] = (cfn(X, U).mean(axis=1), prep)
+        logs += [dict(event_id=eid, base=f"cae_s{seed}", epoch=e, train=t, val=v)
+                 for e, t, v in log]
+
+    # CSITSS reviewer 5: sigmoid head on standardised inputs
+    sfn, log = L.train_autoencoder(X[prep.fit_idx], X[prep.val_idx], seed=0, epochs=a.epochs,
+                                   output="sigmoid")
+    bases["ae_sigmoid_s0"] = (sfn(X).mean(axis=1), prep)
+    logs += [dict(event_id=eid, base="ae_sigmoid_s0", epoch=e, train=t, val=v) for e, t, v in log]
+
+    for seed in AE_SEEDS:
+        bases[f"iforest_s{seed}"] = (L.score_isolation_forest(X[prep.fit_idx], X, seed=seed), prep)
+    pca_fn = lambda Z: L.score_pca(X[prep.fit_idx], Z)  # noqa: E731
+    bases["pca"] = (pca_fn(X), prep)
     bases["three_sigma"] = (L.score_three_sigma(X), prep)
+
+    if ev["event_label"] == "anomaly":
+        rz = L.zscore_ratios(X, prep, ev)
+        if rz is not None:
+            chans.append(pd.DataFrame(dict(event_id=eid, farm=farm, seed=-1, column=prep.columns,
+                                           ratio=rz, subsystem=[col_sub[c] for c in prep.columns])))
 
     pm = prep.pred_mask
     ids = df["id"].to_numpy()
@@ -59,7 +93,19 @@ def run_dataset(eid, farm, ev, feats, a):
             key = f"{base}|{var}"
             thr = float(np.quantile(s[p.cal_b], L.THRESHOLD_Q))
             store[key] = s[pm].astype(np.float32)
+            store[key + "@cal"] = s[p.cal_b].astype(np.float32)
             thresholds[key] = thr
+
+    # robustness: corrupt only the prediction window, rescore, keep the clean threshold
+    fill = np.median(X[prep.fit_idx], axis=0)
+    pm_rows = np.flatnonzero(pm)
+    for kind, level in L.CORRUPTIONS:
+        Xc = L.corrupt(X, pm_rows, kind, level, fill, seed=0)
+        rob = {"ae_s0": ae0_fn(Xc).mean(axis=1), "pca": pca_fn(Xc)}
+        for base in ROBUST_BASES:
+            vs = L.variants(rob[base], prep)
+            for var in ROBUST_VARIANTS:
+                store[f"rob:{kind}{level}:{base}|{var}"] = vs[var][pm].astype(np.float32)
     meta = dict(event_id=int(eid), farm=farm, label=ev["event_label"],
                 n_features=len(prep.columns), n_fit=int(len(prep.fit_idx)),
                 n_filtered=int(prep.n_filtered), thresholds=thresholds)
@@ -74,7 +120,10 @@ def main():
     ap.add_argument("--events", type=int, nargs="*", help="run only these event ids")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--keep-files", action="store_true", help="do not delete downloaded csv")
+    ap.add_argument("--budget-h", type=float, default=0,
+                    help="stop starting new datasets after this many hours (0 = no limit)")
     a = ap.parse_args()
+    t_start = time.time()
     sdir = os.path.join(a.out, "scores")
     os.makedirs(sdir, exist_ok=True)
 
@@ -86,6 +135,10 @@ def main():
             npz = os.path.join(sdir, f"{farm}_{eid}.npz")
             if os.path.exists(npz):
                 continue
+            if a.budget_h and (time.time() - t_start) / 3600 > a.budget_h:
+                print(f"time budget of {a.budget_h} h reached: skipping farm {farm} "
+                      f"event {eid} and the rest", flush=True)
+                break
             t0 = time.time()
             ev = events.loc[eid].copy()
             ev["event_id"] = eid

@@ -266,24 +266,48 @@ def prepare(df: pd.DataFrame, features: pd.DataFrame, max_missing: float = 0.30,
 
 # ------------------------------------------------------------------ models
 
-def train_autoencoder(X_fit, X_val, seed=0, output="linear", epochs=40, batch=256,
-                      lr=1e-3, patience=5, device=None):
-    """Dense AE d-256-64-16-64-256-d. Returns a channel-error function and training log."""
-    import torch
+def _build_ae(d: int, c: int = 0, output: str = "linear"):
+    """Dense AE d-256-64-16-64-256-d. With c > 0 it is a conditional AE: the c operating
+    conditions are appended to the encoder input and to the code before decoding, so the
+    network only has to explain what the operating point does not."""
     from torch import nn
+
+    class AE(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.enc = nn.Sequential(nn.Linear(d + c, 256), nn.ReLU(), nn.Linear(256, 64),
+                                     nn.ReLU(), nn.Linear(64, 16), nn.ReLU())
+            dec = [nn.Linear(16 + c, 64), nn.ReLU(), nn.Linear(64, 256), nn.ReLU(),
+                   nn.Linear(256, d)]
+            if output == "sigmoid":
+                dec.append(nn.Sigmoid())
+            self.dec = nn.Sequential(*dec)
+
+        def forward(self, x, u=None):
+            import torch
+            if c:
+                return self.dec(torch.cat([self.enc(torch.cat([x, u], 1)), u], 1))
+            return self.dec(self.enc(x))
+
+    return AE()
+
+
+def train_autoencoder(X_fit, X_val, seed=0, output="linear", epochs=40, batch=256,
+                      lr=1e-3, patience=5, device=None, U_fit=None, U_val=None):
+    """Train the AE (conditional if U_fit is given). Returns a channel-error function
+    errfn(X, U=None) and the training log [(epoch, train_loss, val_loss)]."""
+    import torch
     torch.manual_seed(seed)
     np.random.seed(seed)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     d = X_fit.shape[1]
-    layers = [nn.Linear(d, 256), nn.ReLU(), nn.Linear(256, 64), nn.ReLU(), nn.Linear(64, 16),
-              nn.ReLU(), nn.Linear(16, 64), nn.ReLU(), nn.Linear(64, 256), nn.ReLU(),
-              nn.Linear(256, d)]
-    if output == "sigmoid":
-        layers.append(nn.Sigmoid())
-    model = nn.Sequential(*layers).to(device)
+    c = 0 if U_fit is None else U_fit.shape[1]
+    model = _build_ae(d, c, output).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     xf = torch.from_numpy(X_fit).to(device)
     xv = torch.from_numpy(X_val).to(device)
+    uf = torch.from_numpy(U_fit.astype(np.float32)).to(device) if c else None
+    uv = torch.from_numpy(U_val.astype(np.float32)).to(device) if c else None
     gen = torch.Generator(device="cpu").manual_seed(seed)
     best, best_state, wait, log = math.inf, None, 0, []
     for ep in range(epochs):
@@ -291,15 +315,16 @@ def train_autoencoder(X_fit, X_val, seed=0, output="linear", epochs=40, batch=25
         perm = torch.randperm(len(xf), generator=gen)
         tot = 0.0
         for i in range(0, len(xf), batch):
-            xb = xf[perm[i:i + batch].to(device)]
-            loss = ((model(xb) - xb) ** 2).mean()
+            j = perm[i:i + batch].to(device)
+            xb = xf[j]
+            loss = ((model(xb, uf[j] if c else None) - xb) ** 2).mean()
             opt.zero_grad()
             loss.backward()
             opt.step()
             tot += loss.item() * len(xb)
         model.eval()
         with torch.no_grad():
-            vl = ((model(xv) - xv) ** 2).mean().item()
+            vl = ((model(xv, uv) - xv) ** 2).mean().item()
         log.append((ep, tot / len(xf), vl))
         if vl < best - 1e-6:
             best, wait = vl, 0
@@ -311,12 +336,13 @@ def train_autoencoder(X_fit, X_val, seed=0, output="linear", epochs=40, batch=25
     model.load_state_dict(best_state)
     model.eval()
 
-    def channel_errors(X):
+    def channel_errors(X, U=None):
         out = []
         with torch.no_grad():
             for i in range(0, len(X), 8192):
                 xb = torch.from_numpy(X[i:i + 8192]).to(device)
-                out.append(((model(xb) - xb) ** 2).cpu().numpy())
+                ub = torch.from_numpy(U[i:i + 8192].astype(np.float32)).to(device) if c else None
+                out.append(((model(xb, ub) - xb) ** 2).cpu().numpy())
         return np.concatenate(out)
 
     return channel_errors, log
@@ -404,12 +430,14 @@ def earliness_weights(n: int) -> np.ndarray:
     return np.where(pos < EARLINESS_FLAT, 1.0, (1.0 - pos) / (1.0 - EARLINESS_FLAT))
 
 
-def care_event(pred: np.ndarray, normal: np.ndarray, in_window: np.ndarray, label: str) -> dict:
+def care_event(pred: np.ndarray, normal: np.ndarray, in_window: np.ndarray, label: str,
+               steps: int | None = None) -> dict:
     """Score one dataset's prediction window with the CARE definitions (Gueck et al. 2024),
     following the reference implementation (EnergyFaultDetector) where the paper is open:
     the criticality is counted up to the end of the event window, earliness weight is 1 for
     the first quarter of the window and falls linearly to 0, abnormal-status rows are left out
     of coverage and accuracy."""
+    steps = ALARM_STEPS if steps is None else steps
     pred, normal, in_window = (np.asarray(a, bool) for a in (pred, normal, in_window))
     win = np.flatnonzero(in_window)
     stop = win[-1] + 1 if len(win) else len(pred)
@@ -422,12 +450,12 @@ def care_event(pred: np.ndarray, normal: np.ndarray, in_window: np.ndarray, labe
                accuracy=(tp + tn) / max(tp + fp + fn + tn, 1),
                coverage=fbeta(tp, fp, fn) if label == "anomaly" else np.nan,
                max_crit=int(crit.max()) if len(crit) else 0,
-               detected=bool(len(crit) and crit.max() >= ALARM_STEPS),
+               detected=bool(len(crit) and crit.max() >= steps),
                earliness=np.nan, lead_h=np.nan)
     if label == "anomaly" and len(win):
         w = earliness_weights(len(win))
         out["earliness"] = float((w * pred[win]).sum() / w.sum())
-        first = np.flatnonzero(crit >= ALARM_STEPS)
+        first = np.flatnonzero(crit >= steps)
         out["lead_h"] = (stop - 1 - first[0]) / 6.0 if len(first) else np.nan
     return out
 
@@ -527,3 +555,84 @@ def subsystem_scores(ch_err: np.ndarray, prep: Prepared, ev: pd.Series, col_sub:
         rows.append(dict(subsystem=name, mean_ratio=float(r.mean()), sum_ratio=float(r.sum()),
                          n_channels=int(len(r))))
     return pd.DataFrame(rows)
+
+
+# ------------------------------------------------------------------ v3 additions
+
+def scaled_conditions(prep: Prepared) -> np.ndarray:
+    """Operating conditions standardised on the fit rows (input of the conditional AE)."""
+    mu = prep.op[prep.fit_idx].mean(axis=0)
+    sd = prep.op[prep.fit_idx].std(axis=0) + 1e-8
+    return np.clip((prep.op - mu) / sd, -10, 10).astype(np.float32)
+
+
+CORRUPTIONS = (("noise", 0.1), ("noise", 0.3), ("noise", 0.5), ("missing", 0.05),
+               ("missing", 0.2))
+
+
+def corrupt(X: np.ndarray, rows: np.ndarray, kind: str, level: float, fill: np.ndarray,
+            seed: int = 0) -> np.ndarray:
+    """Copy of X with the given rows corrupted: Gaussian noise of sd `level` (standardised
+    units), or a fraction `level` of entries replaced by `fill` (the training median), which
+    is what the preprocessing does with a missing value."""
+    rng = np.random.default_rng(seed)
+    Xc = X.copy()
+    block = Xc[rows]
+    if kind == "noise":
+        block = block + rng.normal(0, level, block.shape).astype(np.float32)
+    elif kind == "missing":
+        mask = rng.random(block.shape) < level
+        block = np.where(mask, np.broadcast_to(fill, block.shape), block).astype(np.float32)
+    else:
+        raise ValueError(kind)
+    Xc[rows] = block
+    return Xc
+
+
+def zscore_ratios(X: np.ndarray, prep: Prepared, ev: pd.Series) -> np.ndarray | None:
+    """Attribution baseline without any model: each channel's mean |z| over the event window
+    divided by its mean |z| on the validation rows."""
+    ids = prep.df["id"].to_numpy()
+    nm = prep.eval_normal if prep.eval_normal is not None else prep.normal_mask
+    win = (ids >= ev["event_start_id"]) & (ids <= ev["event_end_id"]) & nm
+    if win.sum() == 0:
+        return None
+    return np.abs(X[win]).mean(axis=0) / (np.abs(X[prep.val_idx]).mean(axis=0) + 1e-8)
+
+
+def split_key(base: str) -> tuple[str, int]:
+    """'ae_s2' -> ('ae', 2); 'iforest_s1' -> ('iforest', 1); 'pca' -> ('pca', 0)."""
+    m = re.match(r"^(.*)_s(\d+)$", base)
+    return (m.group(1), int(m.group(2))) if m else (base, 0)
+
+
+TUNE_Q = (0.95, 0.975, 0.99, 0.995, 0.999)
+TUNE_STEPS = (36, 72, 144)
+
+
+def lofo_select(table: pd.DataFrame, farms=FARMS) -> pd.DataFrame:
+    """Leave-one-farm-out choice of (q, steps).
+
+    table: one row per (farm, q, steps, seed) with the per-event rows of that setting in
+    column 'events' (a DataFrame). For each held-out farm, picks the setting with the best
+    seed-averaged CARE score on the other farms and returns the held-out farm's per-event rows
+    under that setting (all seeds), with the chosen setting attached."""
+    out = []
+    for f in farms:
+        if f not in set(table["farm"]):
+            continue
+        train = table[table["farm"] != f]
+        best, best_care = None, -1.0
+        for (q, st), g in train.groupby(["q", "steps"]):
+            cares = [care_score(pd.concat(gs["events"].tolist()))["care"]
+                     for _, gs in g.groupby("seed")]
+            c = float(np.nanmean(cares)) if np.isfinite(cares).any() else -np.inf
+            if c > best_care + 1e-12:
+                best, best_care = (q, st), c
+        if best is None:
+            continue
+        test = table[(table["farm"] == f) & (table["q"] == best[0]) & (table["steps"] == best[1])]
+        for _, r in test.iterrows():
+            out.append(r["events"].assign(heldout=f, q=best[0], steps=best[1], seed=r["seed"],
+                                          train_care=best_care))
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()

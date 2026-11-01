@@ -1,9 +1,11 @@
-"""Deep dive on dataset 44 (cooling-water valve fault): health index, time-to-threshold with an
-uncertainty band, maintenance-gate sensitivity, subsystem attribution, temperature
-normal-behaviour model, robustness to noise / missing data, and the Unity export.
+"""Case study of one dataset: health index, time-to-threshold with an uncertainty band,
+maintenance-gate sensitivity and subsystem attribution. For farm C datasets also a
+temperature normal-behaviour model (tested on another turbine) and the Unity export.
 
-    python analyze_44.py --data-dir data --out out_44
-CPU is enough (one autoencoder). Needs datasets 44 and 61 (61 = normal year of another turbine).
+    python analyze_case.py --farm C --event 44 --cross 61 --out out/case_44
+    python analyze_case.py --farm A --event 40 --out out/case_40
+CPU is enough (one autoencoder). Robustness to noise / missing data is now part of the
+benchmark (all datasets), not of the case study.
 """
 import argparse
 import json
@@ -85,23 +87,26 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default="data")
     ap.add_argument("--out", default="out_44")
+    ap.add_argument("--farm", default="C")
     ap.add_argument("--event", type=int, default=44)
-    ap.add_argument("--cross", type=int, default=61)
+    ap.add_argument("--cross", type=int, default=61, help="farm C only; 0 = skip")
     ap.add_argument("--epochs", type=int, default=40)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    events = L.load_event_info(a.data_dir).set_index("event_id")
-    feats = L.load_features(a.data_dir)
+    events = L.load_event_info(a.data_dir, a.farm).set_index("event_id")
+    feats = L.load_features(a.data_dir, a.farm)
     ev = events.loc[a.event].copy()
     ev["event_id"] = a.event
-    df = L.load_dataset(a.event, a.data_dir)
-    prep = L.prepare(df, feats, farm="C", train_filter=True)
+    df = L.load_dataset(a.event, a.data_dir, a.farm)
+    prep = L.prepare(df, feats, farm=a.farm, train_filter=True)
+    tag = str(a.event)
+    farm_c = a.farm == "C" and a.cross > 0
     errfn, _ = L.train_autoencoder(prep.X[prep.fit_idx], prep.X[prep.val_idx], seed=0,
                                    epochs=a.epochs)
     ch = errfn(prep.X)
     score = L.variants(ch.mean(axis=1), prep)["cn_smooth"]     # the full pipeline's score
     thr = float(np.quantile(score[prep.cal_b], L.THRESHOLD_Q))
-    summary = {"event": a.event, "description": ev["event_description"], "threshold": thr,
+    summary = {"event": a.event, "farm": a.farm, "description": ev["event_description"], "threshold": thr,
                "n_features": len(prep.columns),
                "detection": L.evaluate(score, prep, ev, thr)}
 
@@ -114,6 +119,7 @@ def main():
     ttt, ttt_lo, ttt_hi, slope = time_to_threshold(hi, hours)
     start, end = ev["event_start"], ev["event_end"]
     in_ev = ((ts >= start) & (ts <= end)).to_numpy()
+    pm = prep.pred_mask
 
     # maintenance gate sensitivity: when would a work order first be raised?
     gate_rows = []
@@ -128,88 +134,67 @@ def main():
                                   visit_h_rel_start=visit_h,
                                   triggers_in_validation=int(trig[prep.cal_b].sum()),
                                   triggers_before_event=int((trig & pre_event).sum())))
-    pd.DataFrame(gate_rows).to_csv(os.path.join(a.out, "gate_sensitivity.csv"), index=False)
+    pd.DataFrame(gate_rows).to_csv(os.path.join(a.out, f"gate_sensitivity_{tag}.csv"), index=False)
 
     # attribution on the labelled window
     col_sub = L.column_subsystems(prep.columns, feats)
     rca = L.subsystem_scores(ch, prep, ev, col_sub).sort_values("mean_ratio", ascending=False)
-    rca.to_csv(os.path.join(a.out, "rca_44.csv"), index=False)
+    rca.to_csv(os.path.join(a.out, f"rca_{tag}.csv"), index=False)
     truth = L.EVENT_SUBSYSTEMS.get(a.event) or []
     summary["rca_rank_of_truth"] = {t: int(rca["subsystem"].tolist().index(t)) + 1
                                     for t in truth if t in rca["subsystem"].tolist()}
 
-    # temperature normal-behaviour model: train on 44 fit rows, test on 44 validation rows
-    # (temporal hold-out), on another turbine's training year (cross-turbine), and on the fault
-    from sklearn.dummy import DummyRegressor
-    from sklearn.ensemble import HistGradientBoostingRegressor
-    from sklearn.linear_model import LinearRegression
-    cross = L.load_dataset(a.cross, a.data_dir)
-    cross_rows = (cross["train_test"] == "train") & (cross["status_type_id"] == 0)
-    temp_rows = []
     preds_fault = {}
-    for name, tgt in TEMP_TARGETS.items():
-        cols = TEMP_INPUTS + [tgt]
-        d44 = df[cols].apply(pd.to_numeric, errors="coerce")
-        ok = d44.notna().all(axis=1).to_numpy() & (df["status_type_id"] == 0).to_numpy()
-        fit = np.intersect1d(prep.fit_idx, np.flatnonzero(ok))
-        val = np.intersect1d(prep.val_idx, np.flatnonzero(ok))
-        Xtr, ytr = d44.iloc[fit][TEMP_INPUTS].to_numpy(), d44.iloc[fit][tgt].to_numpy()
-        dc = cross.loc[cross_rows, cols].apply(pd.to_numeric, errors="coerce").dropna()
-        sets = {"temporal_holdout_44": (d44.iloc[val], ts.iloc[val]),
-                f"cross_turbine_{a.cross}": (dc, cross.loc[dc.index, "time_stamp"])}
-        for mname, model in (("dummy_mean", DummyRegressor()), ("linear", LinearRegression()),
-                             ("hist_gbm", HistGradientBoostingRegressor(random_state=0))):
-            model.fit(Xtr, ytr)
-            for sname, (d, t) in sets.items():
-                p = model.predict(d[TEMP_INPUTS].to_numpy())
-                m = temp_metrics(d[tgt].to_numpy(), p, t.dt.floor("D").to_numpy())
-                temp_rows.append(dict(target=name, model=mname, test=sname,
-                                      **{f"{k}": v[0] for k, v in m.items()},
-                                      **{f"{k}_lo": v[1] for k, v in m.items()},
-                                      **{f"{k}_hi": v[2] for k, v in m.items()}))
-            if mname == "hist_gbm":
-                pf = np.full(len(df), np.nan)
-                rows = np.flatnonzero(d44.notna().all(axis=1).to_numpy())
-                pf[rows] = model.predict(d44.iloc[rows][TEMP_INPUTS].to_numpy())
-                preds_fault[name] = pf
-                res = d44[tgt].to_numpy() - pf
-                summary[f"{name}_residual_mean_val"] = float(np.nanmean(res[val]))
-                summary[f"{name}_residual_mean_event"] = float(np.nanmean(res[in_ev & ok]))
-    pd.DataFrame(temp_rows).to_csv(os.path.join(a.out, "temperature_model.csv"), index=False)
+    if farm_c:
+        # temperature normal-behaviour model: train on 44 fit rows, test on 44 validation rows
+        # (temporal hold-out), on another turbine's training year (cross-turbine), and on the fault
+        from sklearn.dummy import DummyRegressor
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        from sklearn.linear_model import LinearRegression
+        cross = L.load_dataset(a.cross, a.data_dir)
+        cross_rows = (cross["train_test"] == "train") & (cross["status_type_id"] == 0)
+        temp_rows = []
+        preds_fault = {}
+        for name, tgt in TEMP_TARGETS.items():
+            cols = TEMP_INPUTS + [tgt]
+            d44 = df[cols].apply(pd.to_numeric, errors="coerce")
+            ok = d44.notna().all(axis=1).to_numpy() & (df["status_type_id"] == 0).to_numpy()
+            fit = np.intersect1d(prep.fit_idx, np.flatnonzero(ok))
+            val = np.intersect1d(prep.val_idx, np.flatnonzero(ok))
+            Xtr, ytr = d44.iloc[fit][TEMP_INPUTS].to_numpy(), d44.iloc[fit][tgt].to_numpy()
+            dc = cross.loc[cross_rows, cols].apply(pd.to_numeric, errors="coerce").dropna()
+            sets = {"temporal_holdout_44": (d44.iloc[val], ts.iloc[val]),
+                    f"cross_turbine_{a.cross}": (dc, cross.loc[dc.index, "time_stamp"])}
+            for mname, model in (("dummy_mean", DummyRegressor()), ("linear", LinearRegression()),
+                                 ("hist_gbm", HistGradientBoostingRegressor(random_state=0))):
+                model.fit(Xtr, ytr)
+                for sname, (d, t) in sets.items():
+                    p = model.predict(d[TEMP_INPUTS].to_numpy())
+                    m = temp_metrics(d[tgt].to_numpy(), p, t.dt.floor("D").to_numpy())
+                    temp_rows.append(dict(target=name, model=mname, test=sname,
+                                          **{f"{k}": v[0] for k, v in m.items()},
+                                          **{f"{k}_lo": v[1] for k, v in m.items()},
+                                          **{f"{k}_hi": v[2] for k, v in m.items()}))
+                if mname == "hist_gbm":
+                    pf = np.full(len(df), np.nan)
+                    rows = np.flatnonzero(d44.notna().all(axis=1).to_numpy())
+                    pf[rows] = model.predict(d44.iloc[rows][TEMP_INPUTS].to_numpy())
+                    preds_fault[name] = pf
+                    res = d44[tgt].to_numpy() - pf
+                    summary[f"{name}_residual_mean_val"] = float(np.nanmean(res[val]))
+                    summary[f"{name}_residual_mean_event"] = float(np.nanmean(res[in_ev & ok]))
+        pd.DataFrame(temp_rows).to_csv(os.path.join(a.out, f"temperature_model_{tag}.csv"), index=False)
 
-    # robustness: corrupt the prediction window, rescore with the same model and threshold
-    rng = np.random.default_rng(0)
-    rob = []
-    Xp = prep.X.copy()
-    pm = prep.pred_mask
-    med_z = np.median(prep.X[prep.fit_idx], axis=0)
-    for kind, levels in (("noise_sd", (0.0, 0.1, 0.3, 0.5)), ("missing_frac", (0.05, 0.2))):
-        for lev in levels:
-            Xc = Xp.copy()
-            if kind == "noise_sd":
-                Xc[pm] += rng.normal(0, lev, Xc[pm].shape).astype(np.float32)
-            else:
-                mask = rng.random(Xc[pm].shape) < lev
-                block = Xc[pm]
-                block[mask] = np.broadcast_to(med_z, block.shape)[mask]
-                Xc[pm] = block
-            s = L.variants(errfn(Xc).mean(axis=1), prep)["cn_smooth"]
-            r = L.evaluate(s, prep, ev, thr)
-            fpr = r["fp"] / max(r["fp"] + r["tn"], 1)
-            rob.append(dict(corruption=kind, level=lev, roc_auc=r["roc_auc"], pr_auc=r["pr_auc"],
-                            detected=r["detected"], first_alarm_h=r["first_alarm_h_rel_start"],
-                            pointwise_fpr=fpr))
-    pd.DataFrame(rob).to_csv(os.path.join(a.out, "robustness.csv"), index=False)
-
-    # Unity export: measured SCADA values plus model outputs, nothing synthetic
-    unity = pd.DataFrame({"time_stamp": ts})
-    for k, c in UNITY_COLS.items():
-        unity[k] = pd.to_numeric(df[c], errors="coerce")
-    top = rca["subsystem"].iloc[0] if len(rca) else "NONE"
-    unity = unity.assign(anomaly_score=score, alarm=alarm, health_index=hi, ttt_h=ttt,
-                         ttt_lo_h=ttt_lo, ttt_hi_h=ttt_hi,
-                         top_subsystem=np.where(alarm, top, ""))
-    unity.to_csv(os.path.join(a.out, "unity_telemetry.csv"), index=False)
+    if farm_c:
+        # Unity export: measured SCADA values plus model outputs, nothing synthetic
+        unity = pd.DataFrame({"time_stamp": ts})
+        for k, c in UNITY_COLS.items():
+            unity[k] = pd.to_numeric(df[c], errors="coerce")
+        top = rca["subsystem"].iloc[0] if len(rca) else "NONE"
+        unity = unity.assign(anomaly_score=score, alarm=alarm, health_index=hi, ttt_h=ttt,
+                             ttt_lo_h=ttt_lo, ttt_hi_h=ttt_hi,
+                             top_subsystem=np.where(alarm, top, ""))
+        unity.to_csv(os.path.join(a.out, f"unity_telemetry_{tag}.csv"), index=False)
 
     # figures
     def shade(ax):
@@ -225,7 +210,7 @@ def main():
     ax.set_ylabel("HI")
     ax.legend(fontsize=7, loc="lower left")
     fig.tight_layout()
-    fig.savefig(os.path.join(a.out, "fig_hi.png"), dpi=200)
+    fig.savefig(os.path.join(a.out, f"fig_hi_{tag}.png"), dpi=200)
 
     fig, ax = plt.subplots(figsize=(7, 2.6))
     w = pm
@@ -237,26 +222,27 @@ def main():
     ax.set_ylim(0, TTT_CAP)
     ax.legend(fontsize=7)
     fig.tight_layout()
-    fig.savefig(os.path.join(a.out, "fig_ttt.png"), dpi=200)
+    fig.savefig(os.path.join(a.out, f"fig_ttt_{tag}.png"), dpi=200)
 
     fig, ax = plt.subplots(figsize=(3.5, 2.6))
     ax.barh(rca["subsystem"][::-1], rca["mean_ratio"][::-1])
     ax.set_xlabel("event error / validation error")
     fig.tight_layout()
-    fig.savefig(os.path.join(a.out, "fig_rca.png"), dpi=200)
+    fig.savefig(os.path.join(a.out, f"fig_rca_{tag}.png"), dpi=200)
 
-    name = "cooling_water_outlet"
-    fig, ax = plt.subplots(figsize=(7, 2.6))
-    meas = pd.to_numeric(df[TEMP_TARGETS[name]], errors="coerce")
-    ax.plot(ts[w], meas[w], lw=0.6, label="measured")
-    ax.plot(ts[w], preds_fault[name][w], lw=0.6, label="expected (normal-behaviour model)")
-    shade(ax)
-    ax.set_ylabel("cooling water out (°C)")
-    ax.legend(fontsize=7)
-    fig.tight_layout()
-    fig.savefig(os.path.join(a.out, "fig_temp.png"), dpi=200)
+    if farm_c:
+        name = "cooling_water_outlet"
+        fig, ax = plt.subplots(figsize=(7, 2.6))
+        meas = pd.to_numeric(df[TEMP_TARGETS[name]], errors="coerce")
+        ax.plot(ts[w], meas[w], lw=0.6, label="measured")
+        ax.plot(ts[w], preds_fault[name][w], lw=0.6, label="expected (normal-behaviour model)")
+        shade(ax)
+        ax.set_ylabel("cooling water out (°C)")
+        ax.legend(fontsize=7)
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.out, f"fig_temp_{tag}.png"), dpi=200)
 
-    with open(os.path.join(a.out, "summary_44.json"), "w") as f:
+    with open(os.path.join(a.out, f"summary_{tag}.json"), "w") as f:
         json.dump(summary, f, indent=2, default=str)
     print(json.dumps(summary, indent=2, default=str))
 
