@@ -25,15 +25,15 @@ with a Unity scene that replays the turbine's measured state and the model's war
    environment), and areas are ranked by how much worse the AE reconstructs them during the
    fault than when healthy.
 5. **Suggests when to act.** A causal health index (1 = healthy, 0.5 = alarm threshold) and
-   its recent slope give a time to a failure floor with a 95 % band; a work order is
-   suggested when that time falls below a gate of 72, 168 or 336 hours.
+   its recent slope give a time to a failure floor, with an uncertainty band; if an alarm is
+   active and that time drops under 72, 168 or 336 hours, a work order is proposed.
 6. **Shows it.** Measured wind speed, rotor speed, power and temperatures, with the score,
    alarm, health index and time-to-threshold, are exported per time step for a Unity
    playback of the turbine.
 
-Everything is **leakage-safe**: splits are ordered in time, every statistic is fitted on
-the training year only, the prediction window is never seen before scoring, and all
-settings were fixed before testing.
+Everything is **leakage-safe**: data are split by time, scalers, imputers, models and
+thresholds only ever see the training year, the test window stays untouched until it is
+scored, and no setting was changed after looking at test results.
 
 ## Results on all 95 datasets
 
@@ -62,9 +62,9 @@ periods; 0.5 = random predictions; the benchmark's per-farm tuned AE reports 0.6
   not threshold choice.
 - **Attribution:** the right plant area is ranked first for 37 % of 40 labelled faults
   (random 12 %, raw z-scores 22 %, always naming the commonest area 30 %).
-- **Case studies:** a generator-bearing failure (dataset 40) raised its first alarm about
-  29 days before the end of its fault window, with the generator ranked first; a cooling-water
-  valve fault (dataset 44) was missed, although the cooling area still ranked first.
+- **Case studies:** for a generator-bearing failure (dataset 40) the alarm came roughly a
+  month before the fault window closed, and the generator was the top-ranked area; a
+  cooling-water valve fault (dataset 44) went undetected, yet cooling was still the top area.
 - **Cost:** every detector trains in under 25 s per turbine-year on a T4 GPU and scores
   1000 rows in at most 10 ms.
 

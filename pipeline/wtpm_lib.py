@@ -223,10 +223,10 @@ def prepare(df: pd.DataFrame, features: pd.DataFrame, max_missing: float = 0.30,
 
     Dropped: metadata columns (id, asset_id, status_type_id ...), angle sensors (wrap at 360),
     counter sensors (cumulative energy), columns with > max_missing NaN in training, and
-    columns constant in training. With train_filter, training rows where the wind is in the
-    operating range but the turbine produces (almost) no power are also left out.
-    Farm A's status codes come from the fault logbook, so they are used to pick training rows
-    but are ignored in evaluation (as in the CARE reference implementation).
+    columns constant in training. With train_filter, idle training rows (good wind, almost no
+    power) are excluded as well.
+    Farm A status codes were reconstructed from a logbook: they select training rows, but
+    evaluation treats every farm-A row as normal-status (CARE reference implementation).
     """
     normal = df["status_type_id"].isin(NORMAL_STATUS).to_numpy()
     train = (df["train_test"] == "train").to_numpy()

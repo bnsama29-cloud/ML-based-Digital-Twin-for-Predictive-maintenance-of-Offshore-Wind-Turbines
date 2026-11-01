@@ -22,5 +22,5 @@ Figures drawn from these files are in [`../figures`](../figures). The case-40 fi
 were redrawn with a local CPU rerun of `analyze_case.py` (first alarm 46.0 h after the
 window start, against 45.2 h in the Kaggle run whose numbers are in `case_40/`).
 
-Note on counts: the event files of the Zenodo version used (record 15846963) label 45 fault
-and 50 normal datasets; the dataset paper lists 44 and 51.
+Note on counts: in Zenodo record 15846963, `event_info.csv` marks 45 datasets as anomaly and
+50 as normal (the CARE article reports 44 / 51).

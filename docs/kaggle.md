@@ -60,7 +60,7 @@ same rows.
 |---|---|
 | `tables/care.csv` | CARE score and its parts for every detector × post-processing, all farms and per farm |
 | `tables/bootstrap.csv` | paired, label-stratified bootstrap of CARE differences between configurations |
-| `tables/lofo.csv` | thresholds tuned on two farms and tested on the third (with the in-sample ceiling) |
+| `tables/lofo.csv` | leave-one-farm-out choice of quantile and counter, plus the in-sample ceiling |
 | `tables/counter_sensitivity.csv` | alarm counter of 36 / 72 / 144 rows |
 | `tables/robustness.csv` | CARE, detections and false alarms under noise and missing values |
 | `tables/val_loss_heads.csv` | best validation loss: linear vs sigmoid output, conditional AE, LSTM AE |
@@ -72,7 +72,7 @@ same rows.
 
 ## Settings fixed before the runs
 - Training rows: training year, status 0/2, minus idle-in-good-wind rows (wind 5–20 m/s,
-  power < 2 % of P99); last 15 % held out and split in time into C_a and C_b
+  power < 2 % of P99); the final 15 % of these rows form C_a (first half) and C_b (second half)
 - Condition model: HistGBR (200 trees, rate 0.05) on wind, power, rotor speed, ambient, fitted on C_a
 - Smoothing: causal 6 h rolling median
 - Threshold: 99th percentile on C_b; alarm: criticality counter ≥ 72 (12 h)
@@ -80,7 +80,7 @@ same rows.
 - Conditional AE: same widths, the four scaled operating conditions added to input and code
 - LSTM AE: 1 h windows (6 rows), hidden size 64, scored causally
 - Tuning grid (leave-one-farm-out only): quantile {0.95, 0.975, 0.99, 0.995, 0.999} × counter {36, 72, 144}
-- Robustness: prediction window only; Gaussian noise σ ∈ {0.1, 0.3, 0.5} or {5, 20} % of
-  entries set to the training median; thresholds unchanged
+- Robustness: only the test window is altered (Gaussian noise σ ∈ {0.1, 0.3, 0.5}, or 5 % /
+  20 % of values replaced by the training median); thresholds stay as calibrated
 - Case studies: dataset 44 (cooling-water valve, farm C) and dataset 40 (generator bearing, farm A),
   both chosen before the run
