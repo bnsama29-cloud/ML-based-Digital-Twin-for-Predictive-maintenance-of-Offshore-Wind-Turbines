@@ -86,7 +86,7 @@ pipeline/          the validated pipeline
   merge_results.py   stored scores -> result tables (merges run A and run B)
   make_figures.py    summary figures from the result tables
   run_all.py         everything in one go, ends with a zip
-tests/             unit tests (39) for the library and the merge step
+tests/             unit tests (46) for the library and the merge step
 results/           tables and case studies of the final run
 figures/           framework diagram, summary and case-study figures
 docs/kaggle.md     how to reproduce the full run on Kaggle

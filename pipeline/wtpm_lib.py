@@ -390,9 +390,52 @@ def condition_normalise(score: np.ndarray, prep: Prepared, seed: int = 0) -> np.
 VARIANTS = ("raw", "smooth", "cn", "cn_smooth")
 
 
-def variants(score: np.ndarray, prep: Prepared) -> dict[str, np.ndarray]:
+def variants(score: np.ndarray, prep: Prepared, rules: bool = False) -> dict[str, np.ndarray]:
+    """raw / smooth / cn / cn_smooth; with rules=True also EWMA and CUSUM post-processing
+    of the raw and the condition-normalised score (the polish run)."""
     cn = condition_normalise(score, prep)
-    return {"raw": score, "smooth": smooth(score), "cn": cn, "cn_smooth": smooth(cn)}
+    out = {"raw": score, "smooth": smooth(score), "cn": cn, "cn_smooth": smooth(cn)}
+    if rules:
+        for name, base in (("raw", score), ("cn", cn)):
+            out[f"{name}_ewma"] = ewma(base)
+            med, sd = robust_scale(base[prep.cal_b])
+            out[f"{name}_cusum"] = cusum(base, med, sd)
+    return out
+
+
+# ---------------------------------------------------------- alternative alarm rules
+# Fixed before the polish run. EWMA has the 6 h span of the median; CUSUM detects an upward
+# shift of one robust standard deviation of the calibration score (slice C_b).
+EWMA_SPAN = 36
+CUSUM_K = 0.5
+RULE_VARIANTS = ("raw_ewma", "raw_cusum", "cn_ewma", "cn_cusum")
+
+
+def ewma(s: np.ndarray, span: int = EWMA_SPAN) -> np.ndarray:
+    """Causal exponentially weighted moving average, started at the first value."""
+    return pd.Series(np.asarray(s, float)).ewm(span=span, adjust=False).mean().to_numpy()
+
+
+def robust_scale(cal: np.ndarray) -> tuple[float, float]:
+    """Median and IQR-based standard deviation of calibration scores."""
+    cal = np.asarray(cal, float)
+    med = float(np.median(cal))
+    q25, q75 = np.quantile(cal, [0.25, 0.75])
+    sd = float(q75 - q25) / 1.349
+    return med, (sd if sd > 1e-12 else float(np.std(cal)) + 1e-12)
+
+
+def cusum(s: np.ndarray, med: float, sd: float, k: float = CUSUM_K) -> np.ndarray:
+    """One-sided upper CUSUM of the standardised score, S(t) = max(0, S(t-1) + z(t) - k)."""
+    z = (np.asarray(s, float) - med) / sd - k
+    out = np.empty(len(z))
+    acc = 0.0
+    for i, v in enumerate(z):
+        acc = acc + v
+        if acc < 0.0:
+            acc = 0.0
+        out[i] = acc
+    return out
 
 # ------------------------------------------------------------- evaluation
 
@@ -637,6 +680,108 @@ def lofo_select(table: pd.DataFrame, farms=FARMS) -> pd.DataFrame:
             out.append(r["events"].assign(heldout=f, q=best[0], steps=best[1], seed=r["seed"],
                                           train_care=best_care))
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+
+# ------------------------------------------- polish run: normal behaviour model, sensor faults
+
+def train_condition_model(U_fit, X_fit, U_val, X_val, seed=0, epochs=40, batch=256, lr=1e-3,
+                          patience=5, device=None):
+    """Multi-target normal behaviour model: an MLP 4-64-256-d predicts every standardised
+    channel from the four scaled operating conditions only (classical NBM, all channels at
+    once). Same training rules as the AE. Returns errfn(U, X) -> squared error per channel."""
+    import torch
+    from torch import nn
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    d, c = X_fit.shape[1], U_fit.shape[1]
+    model = nn.Sequential(nn.Linear(c, 64), nn.ReLU(), nn.Linear(64, 256), nn.ReLU(),
+                          nn.Linear(256, d)).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    uf = torch.from_numpy(U_fit.astype(np.float32)).to(device)
+    xf = torch.from_numpy(X_fit.astype(np.float32)).to(device)
+    uv = torch.from_numpy(U_val.astype(np.float32)).to(device)
+    xv = torch.from_numpy(X_val.astype(np.float32)).to(device)
+    gen = torch.Generator(device="cpu").manual_seed(seed)
+    best, best_state, wait, log = math.inf, None, 0, []
+    for ep in range(epochs):
+        model.train()
+        perm = torch.randperm(len(xf), generator=gen)
+        tot = 0.0
+        for i in range(0, len(xf), batch):
+            j = perm[i:i + batch].to(device)
+            loss = ((model(uf[j]) - xf[j]) ** 2).mean()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(j)
+        model.eval()
+        with torch.no_grad():
+            vl = ((model(uv) - xv) ** 2).mean().item()
+        log.append((ep, tot / len(xf), vl))
+        if vl < best - 1e-6:
+            best, wait = vl, 0
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        else:
+            wait += 1
+            if wait >= patience:
+                break
+    model.load_state_dict(best_state)
+    model.eval()
+
+    def channel_errors(U, X):
+        out = []
+        with torch.no_grad():
+            for i in range(0, len(X), 8192):
+                ub = torch.from_numpy(U[i:i + 8192].astype(np.float32)).to(device)
+                xb = torch.from_numpy(X[i:i + 8192].astype(np.float32)).to(device)
+                out.append(((model(ub) - xb) ** 2).cpu().numpy())
+        return np.concatenate(out)
+
+    return channel_errors, log
+
+
+SENSOR_FAULTS = ("drift", "stuck", "dropout")
+DRIFT_SD = 3.0          # drift reaches +3 training standard deviations at the window end
+SKIP_AREAS = ("ENVIRONMENT", "OTHER")
+
+
+def pick_fault_channel(columns: list[str], col_sub: dict, event_id: int,
+                       exclude: set[str] = frozenset()) -> int | None:
+    """Channel to corrupt in the sensor-fault tests: drawn with the event id as seed among
+    channels that belong to a plant area (not environment / unassigned) and are not one of
+    the operating-condition sensors in `exclude` (base names). Fixed in advance."""
+    cand = [i for i, c in enumerate(columns)
+            if col_sub[c] not in SKIP_AREAS and base_sensor(c) not in exclude]
+    if not cand:
+        return None
+    return int(np.random.default_rng(int(event_id)).choice(cand))
+
+
+def sensor_fault(X: np.ndarray, rows: np.ndarray, kind: str, ch: int, area_cols: np.ndarray,
+                 fill: np.ndarray) -> np.ndarray:
+    """Copy of X with a simulated sensor fault in the given rows:
+    drift   - channel ch drifts linearly from 0 to +DRIFT_SD over the rows,
+    stuck   - channel ch freezes at its value in the first row,
+    dropout - every channel of ch's plant area is lost and imputed with the training median."""
+    Xc = X.copy()
+    if len(rows) == 0:
+        return Xc
+    if kind == "drift":
+        Xc[rows, ch] = Xc[rows, ch] + np.linspace(0, DRIFT_SD, len(rows)).astype(np.float32)
+    elif kind == "stuck":
+        Xc[rows, ch] = Xc[rows[0], ch]
+    elif kind == "dropout":
+        Xc[np.ix_(rows, area_cols)] = np.broadcast_to(fill[area_cols], (len(rows), len(area_cols)))
+    else:
+        raise ValueError(kind)
+    return Xc
+
+
+def window_ratios(ch_err: np.ndarray, prep: Prepared, rows: np.ndarray) -> np.ndarray:
+    """Channel error ratio over arbitrary evaluation rows against the healthy validation rows."""
+    base = ch_err[prep.val_idx].mean(axis=0) + 1e-8
+    return ch_err[rows].mean(axis=0) / base
 
 
 # ------------------------------------------------------- run B: LSTM autoencoder

@@ -37,7 +37,7 @@ def make_zips(out, zip_path):
         for root, _, files in os.walk(out):
             for f in files:
                 p = os.path.join(root, f)
-                arc = os.path.join("results_v3", os.path.relpath(p, out))
+                arc = os.path.join(os.path.basename(zip_path)[:-4], os.path.relpath(p, out))
                 (zs if os.sep + "scores" + os.sep in p else zr).write(p, arc)
     for z in (zip_path, scores_zip):
         print(f"{z}: {os.path.getsize(z) / 1e6:.1f} MB", flush=True)
@@ -52,8 +52,9 @@ def main():
                     help="stop starting new datasets after this many hours (Kaggle stops at 12)")
     ap.add_argument("--events", type=int, nargs="*", help="test on a few event ids only")
     ap.add_argument("--epochs", type=int, default=40)
-    ap.add_argument("--detectors", choices=["main", "lstm"], default="main",
-                    help="main = run A; lstm = run B (LSTM AE + timing, no case studies)")
+    ap.add_argument("--detectors", choices=["main", "lstm", "polish"], default="main",
+                    help="main = run A; lstm = run B (LSTM AE + timing, no case studies); "
+                         "polish = run C (alarm rules, condition model, sensor faults)")
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     bench = os.path.join(a.out, "benchmark")

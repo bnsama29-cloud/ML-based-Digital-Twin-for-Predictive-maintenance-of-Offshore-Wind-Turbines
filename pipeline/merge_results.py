@@ -15,9 +15,12 @@ import wtpm_lib as L
 
 BASE_LABEL = {"ae": "Autoencoder", "ae_nofilter": "AE, no training filter",
               "cae": "Conditional AE", "ae_sigmoid": "AE, sigmoid output", "lstm": "LSTM AE",
-              "iforest": "Isolation Forest", "pca": "PCA", "three_sigma": "3-sigma fraction"}
+              "iforest": "Isolation Forest", "pca": "PCA", "three_sigma": "3-sigma fraction",
+              "nbm": "Condition model (NBM)"}
 VAR_LABEL = {"raw": "raw", "smooth": "+ smoothing", "cn": "+ condition norm.",
-             "cn_smooth": "+ cond. norm. + smoothing"}
+             "cn_smooth": "+ cond. norm. + smoothing", "raw_ewma": "+ EWMA",
+             "raw_cusum": "+ CUSUM", "cn_ewma": "+ cond. norm. + EWMA",
+             "cn_cusum": "+ cond. norm. + CUSUM"}
 
 
 def load_raw(inputs):
@@ -75,7 +78,7 @@ def care_table(ev: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def attribution_table(ch: pd.DataFrame) -> pd.DataFrame:
+def attribution_table(ch: pd.DataFrame, label: str = "AE") -> pd.DataFrame:
     """Top-1 / top-3 hit rate against the hand-labelled plant area of each anomaly event."""
     labelled = {e: s for e, s in L.EVENT_SUBSYSTEMS.items() if s}
     ch = ch[ch["event_id"].isin(labelled)].drop_duplicates(["event_id", "seed", "column"],
@@ -100,7 +103,7 @@ def attribution_table(ch: pd.DataFrame) -> pd.DataFrame:
                     h3 += bool(truth & set(ranked[:3]))
                 per_seed.append((h1 / len(events), h3 / len(events)))
             a = np.array(per_seed)
-            rows.append(dict(farm=farm, rule=f"AE ratio, {rule}", top1=a[:, 0].mean(),
+            rows.append(dict(farm=farm, rule=f"{label} ratio, {rule}", top1=a[:, 0].mean(),
                              top1_sd=a[:, 0].std(), top3=a[:, 1].mean(), top3_sd=a[:, 1].std(),
                              n_events=len(events)))
         zf = zch if farm == "all" else zch[zch["farm"] == farm]
@@ -151,7 +154,8 @@ def keys_of(raw, method, var):
     return sorted(k for k in keys if k.endswith("|" + var) and L.split_key(k.split("|")[0])[0] == method)
 
 
-MAIN_CONFIGS = [(m, v) for m in ("ae", "cae", "lstm", "pca", "iforest") for v in L.VARIANTS]
+MAIN_CONFIGS = [(m, v) for m in ("ae", "cae", "lstm", "pca", "iforest", "nbm")
+                for v in (*L.VARIANTS, *L.RULE_VARIANTS)]
 
 
 def lofo_table(raw):
@@ -239,7 +243,28 @@ PAIRS = [("ae|smooth", "ae|raw"), ("ae|cn", "ae|raw"), ("ae|cn_smooth", "ae|smoo
          ("ae|cn_smooth", "ae|raw"), ("cae|raw", "ae|raw"), ("cae|smooth", "ae|cn_smooth"),
          ("ae|smooth", "pca|smooth"), ("ae|cn_smooth", "pca|cn_smooth"),
          ("iforest|cn_smooth", "iforest|raw"), ("ae|raw", "ae_sigmoid|raw"),
-         ("lstm|raw", "ae|raw"), ("lstm|smooth", "ae|smooth"), ("lstm|cn_smooth", "ae|cn_smooth")]
+         ("lstm|raw", "ae|raw"), ("lstm|smooth", "ae|smooth"), ("lstm|cn_smooth", "ae|cn_smooth"),
+         # polish run (run C): alarm rules and the condition model
+         ("ae|cn_cusum", "ae|cn_smooth"), ("ae|cn_ewma", "ae|cn_smooth"),
+         ("ae|raw_cusum", "ae|smooth"), ("ae|raw_ewma", "ae|smooth"),
+         ("pca|cn_cusum", "pca|cn_smooth"), ("iforest|cn_cusum", "iforest|cn_smooth"),
+         ("nbm|cn_smooth", "ae|cn_smooth"), ("nbm|smooth", "ae|smooth"), ("nbm|raw", "ae|raw")]
+
+
+def sensorfault_table(sf: pd.DataFrame) -> pd.DataFrame:
+    """Sensor-fault tests: how often the corrupted channel is ranked first among all channels
+    and its plant area first (vote rule), on normal datasets (no real fault to confuse)."""
+    sf = sf[sf["label"] == "normal"]
+    rows = []
+    for (kind, base), g in sf.groupby(["kind", "base"]):
+        rows.append(dict(kind=kind, base=base, n=len(g),
+                         channel_top1=float((g["channel_rank"] == 1).mean()),
+                         channel_top10=float((g["channel_rank"] <= 10).mean()),
+                         area_top1=float((g["area_rank"] == 1).mean()),
+                         area_top3=float((g["area_rank"] <= 3).mean()),
+                         median_channel_rank=float(g["channel_rank"].median()),
+                         median_n_channels=float(g["n_channels"].median())))
+    return pd.DataFrame(rows)
 
 
 def robustness_table(raw):
@@ -309,6 +334,26 @@ def main():
     print("\n== CARE score ==\n" + care[care.farm == "all"][show].round(3).to_string(index=False))
 
     chans = [f for d in a.inputs for f in glob.glob(os.path.join(d, "channels.csv"))]
+    nbm = [f for d in a.inputs for f in glob.glob(os.path.join(d, "channels_nbm.csv"))]
+    if nbm:
+        try:
+            t = attribution_table(pd.concat([pd.read_csv(f) for f in nbm]), label="NBM")
+            t.to_csv(os.path.join(a.out, "attribution_nbm.csv"), index=False)
+            print("\n== attribution, condition model ==\n" + t.round(3).to_string(index=False))
+        except Exception:
+            import traceback
+            traceback.print_exc()
+    sfs = [f for d in a.inputs for f in glob.glob(os.path.join(d, "sensorfault.csv"))]
+    if sfs:
+        try:
+            raw_sf = pd.concat([pd.read_csv(f) for f in sfs])
+            raw_sf.to_csv(os.path.join(a.out, "sensorfault_rows.csv"), index=False)
+            t = sensorfault_table(raw_sf)
+            t.to_csv(os.path.join(a.out, "sensorfault.csv"), index=False)
+            print("\n== sensor-fault attribution ==\n" + t.round(3).to_string(index=False))
+        except Exception:
+            import traceback
+            traceback.print_exc()
     if chans:
         att = attribution_table(pd.concat([pd.read_csv(f) for f in chans]))
         att.to_csv(os.path.join(a.out, "attribution.csv"), index=False)

@@ -9,6 +9,9 @@ v3 detectors: AE (3 seeds), AE without the training filter, conditional AE (3 se
 AE with a sigmoid output head (seed 0), Isolation Forest (3 seeds), PCA, 3-sigma fraction.
 Robustness: the prediction window is corrupted (noise / missing values) and rescored by
 AE seed 0 and PCA without retraining.
+Run B (--detectors lstm): LSTM AE (3 seeds) and compute times.
+Run C (--detectors polish): AE, condition model (NBM), IF (3 seeds each), PCA, 3-sigma, every
+score also post-processed with EWMA and CUSUM, plus sensor-fault tests (drift, stuck, dropout).
 
 Normally called by run_all.py. Resumable: datasets with an existing scores file are skipped.
 """
@@ -90,6 +93,93 @@ def store_scores(df, prep, ev, eid, farm, bases):
                 n_features=len(prep.columns), n_fit=int(len(prep.fit_idx)),
                 n_filtered=int(prep.n_filtered), thresholds=thresholds)
     return store, meta
+
+
+def run_dataset_polish(eid, farm, ev, feats, a):
+    """Run C (polish): AE (3 seeds), multi-target condition model NBM (3 seeds), Isolation
+    Forest (3 seeds), PCA and 3-sigma, every score also post-processed with EWMA and CUSUM;
+    sensor-fault tests (drift, stuck, dropout) on AE seed 0 and NBM seed 0."""
+    df = L.load_dataset(eid, a.data_dir, farm)
+    prep = L.prepare(df, feats, farm=farm, train_filter=True)
+    X = prep.X
+    U = L.scaled_conditions(prep)
+    col_sub = L.column_subsystems(prep.columns, feats)
+    subs = np.array([col_sub[c] for c in prep.columns])
+    bases, logs, chans, nbm_chans, faults = {}, [], [], [], []
+    fns = {}
+
+    def keep_ratios(target, ch, name, seed):
+        if ev["event_label"] != "anomaly":
+            return
+        r = L.channel_ratios(ch, prep, ev)
+        if r is not None:
+            target.append(pd.DataFrame(dict(event_id=eid, farm=farm, seed=seed,
+                                            column=prep.columns, ratio=r, subsystem=subs,
+                                            detector=name)))
+
+    for seed in AE_SEEDS:
+        errfn, log = L.train_autoencoder(X[prep.fit_idx], X[prep.val_idx], seed=seed,
+                                         epochs=a.epochs)
+        ch = errfn(X)
+        bases[f"ae_s{seed}"] = (ch.mean(axis=1), prep)
+        keep_ratios(chans, ch, "ae", seed)
+        logs += [dict(event_id=eid, base=f"ae_s{seed}", epoch=e, train=t, val=v) for e, t, v in log]
+        if seed == 0:
+            fns["ae_s0"] = lambda Z, f=errfn: f(Z)
+        nfn, log = L.train_condition_model(U[prep.fit_idx], X[prep.fit_idx], U[prep.val_idx],
+                                           X[prep.val_idx], seed=seed, epochs=a.epochs)
+        ch = nfn(U, X)
+        bases[f"nbm_s{seed}"] = (ch.mean(axis=1), prep)
+        keep_ratios(nbm_chans, ch, "nbm", seed)
+        logs += [dict(event_id=eid, base=f"nbm_s{seed}", epoch=e, train=t, val=v) for e, t, v in log]
+        if seed == 0:
+            fns["nbm_s0"] = lambda Z, f=nfn: f(U, Z)
+        bases[f"iforest_s{seed}"] = (L.score_isolation_forest(X[prep.fit_idx], X, seed=seed), prep)
+    bases["pca"] = (L.score_pca(X[prep.fit_idx], X), prep)
+    bases["three_sigma"] = (L.score_three_sigma(X), prep)
+
+    pm = prep.pred_mask
+    ids = df["id"].to_numpy()
+    store = dict(ids=ids[pm], eval_normal=prep.eval_normal[pm],
+                 in_window=(ids[pm] >= ev["event_start_id"]) & (ids[pm] <= ev["event_end_id"]))
+    thresholds = {}
+    for base, (score, p) in bases.items():
+        for var, s in L.variants(score, p, rules=True).items():
+            key = f"{base}|{var}"
+            store[key] = s[pm].astype(np.float32)
+            store[key + "@cal"] = s[p.cal_b].astype(np.float32)
+            thresholds[key] = float(np.quantile(s[p.cal_b], L.THRESHOLD_Q))
+
+    # sensor-fault tests: corrupt the prediction window, rescore without retraining
+    op_sensors = {L.base_sensor(c) for c in L.OPERATING[farm].values()}
+    ch_i = L.pick_fault_channel(prep.columns, col_sub, eid, exclude=op_sensors)
+    pm_rows = np.flatnonzero(pm)
+    eval_rows = pm_rows[prep.eval_normal[pm_rows]]
+    if ch_i is not None and len(eval_rows):
+        area = subs[ch_i]
+        area_cols = np.flatnonzero(subs == area)
+        fill = np.median(X[prep.fit_idx], axis=0)
+        for kind in ("none", *L.SENSOR_FAULTS):
+            Xc = X if kind == "none" else L.sensor_fault(X, pm_rows, kind, ch_i, area_cols, fill)
+            for base, fn in fns.items():
+                ch = fn(Xc)
+                if kind != "none":
+                    for var, s in L.variants(ch.mean(axis=1), prep).items():
+                        if var == "cn_smooth":
+                            store[f"rob:{kind}:{base}|{var}"] = s[pm].astype(np.float32)
+                r = L.window_ratios(ch, prep, eval_rows)
+                order = np.argsort(r)[::-1]
+                ranked = L.rank_subsystems(r, subs, "vote")
+                faults.append(dict(event_id=eid, farm=farm, label=ev["event_label"], kind=kind,
+                                   base=base, column=prep.columns[ch_i], area=area,
+                                   n_area_channels=len(area_cols),
+                                   channel_rank=int(np.flatnonzero(order == ch_i)[0]) + 1,
+                                   area_rank=(ranked.index(area) + 1) if area in ranked else np.nan,
+                                   n_channels=len(prep.columns)))
+    meta = dict(event_id=int(eid), farm=farm, label=ev["event_label"],
+                n_features=len(prep.columns), n_fit=int(len(prep.fit_idx)),
+                n_filtered=int(prep.n_filtered), thresholds=thresholds)
+    return store, meta, logs, (chans, nbm_chans, faults)
 
 
 def run_dataset(eid, farm, ev, feats, a):
@@ -184,8 +274,10 @@ def main():
     ap.add_argument("--events", type=int, nargs="*", help="run only these event ids")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--keep-files", action="store_true", help="do not delete downloaded csv")
-    ap.add_argument("--detectors", choices=["main", "lstm"], default="main",
-                    help="main = run A (all v3 detectors); lstm = run B (LSTM autoencoder only)")
+    ap.add_argument("--detectors", choices=["main", "lstm", "polish"], default="main",
+                    help="main = run A (all v3 detectors); lstm = run B (LSTM autoencoder only); "
+                         "polish = run C (AE, NBM, IF, PCA, 3-sigma with EWMA/CUSUM rules and "
+                         "sensor-fault tests)")
     ap.add_argument("--budget-h", type=float, default=0,
                     help="stop starting new datasets after this many hours (0 = no limit)")
     a = ap.parse_args()
@@ -210,25 +302,31 @@ def main():
             ev["event_id"] = eid
             if a.detectors == "lstm":
                 (store, meta), logs, chans = run_dataset_lstm(eid, farm, ev, feats, a)
+                sides = [(os.path.join(a.out, "timing.csv"), pd.DataFrame(chans))]
+            elif a.detectors == "polish":
+                store, meta, logs, (chans, nbm_chans, faults) = run_dataset_polish(
+                    eid, farm, ev, feats, a)
+                sides = [(os.path.join(a.out, "channels.csv"),
+                          pd.concat(chans) if chans else pd.DataFrame()),
+                         (os.path.join(a.out, "channels_nbm.csv"),
+                          pd.concat(nbm_chans) if nbm_chans else pd.DataFrame()),
+                         (os.path.join(a.out, "sensorfault.csv"), pd.DataFrame(faults))]
             else:
                 store, meta, logs, chans = run_dataset(eid, farm, ev, feats, a)
-            if a.detectors == "lstm":
-                side = (os.path.join(a.out, "timing.csv"), pd.DataFrame(chans))
-            else:
-                side = (os.path.join(a.out, "channels.csv"),
-                        pd.concat(chans) if chans else pd.DataFrame())
-            for path, rows in ((os.path.join(a.out, "trainlog.csv"), pd.DataFrame(logs)), side):
+                sides = [(os.path.join(a.out, "channels.csv"),
+                          pd.concat(chans) if chans else pd.DataFrame())]
+            for path, rows in ((os.path.join(a.out, "trainlog.csv"), pd.DataFrame(logs)), *sides):
                 if len(rows):
                     rows.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
             with open(os.path.join(sdir, f"{farm}_{eid}.json"), "w") as f:
                 json.dump(meta, f)
             np.savez_compressed(npz, **store)        # written last: marks the dataset done
-            k0 = "ae_s0|cn_smooth" if a.detectors == "main" else "lstm_s0|cn_smooth"
+            k0 = "lstm_s0|cn_smooth" if a.detectors == "lstm" else "ae_s0|cn_smooth"
             crit = L.criticality(store[k0] > meta["thresholds"][k0], store["eval_normal"]).max()
             print(f"farm {farm} event {eid} ({meta['label']}): {meta['n_features']} features, "
                   f"{meta['n_filtered']} idle rows filtered, max criticality {crit}, "
                   f"{time.time() - t0:.0f}s", flush=True)
-            if not a.keep_files and (a.detectors == "lstm" or eid not in KEEP_ON_DISK):
+            if not a.keep_files and (a.detectors != "main" or eid not in KEEP_ON_DISK):
                 f = L.dataset_path(eid, a.data_dir, farm)
                 if os.path.exists(f):
                     os.remove(f)

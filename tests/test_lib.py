@@ -311,3 +311,99 @@ def test_load_raw_combines_run_a_and_run_b(tmp_path):
     assert len(raw) == 1
     meta, data = raw[0]
     assert set(meta["thresholds"]) == {"ae_s0|raw", "lstm_s0|raw"} and "lstm_s0|raw" in data
+
+
+# ------------------------------------------------------------- polish run (run C)
+
+def test_ewma_is_causal_and_matches_recursion():
+    s = np.r_[np.zeros(10), np.ones(10)]
+    e = L.ewma(s, span=3)
+    lam = 2 / 4
+    ref, acc = [], 0.0
+    for v in s:
+        acc = lam * v + (1 - lam) * acc
+        ref.append(acc)
+    assert np.allclose(e, ref)
+    s2 = s.copy()
+    s2[15:] = 100                                  # the future must not change the past
+    assert np.allclose(L.ewma(s2, span=3)[:15], e[:15])
+
+
+def test_cusum_accumulates_a_sustained_shift_only():
+    rng = np.random.default_rng(0)
+    healthy = rng.normal(size=2000)
+    med, sd = L.robust_scale(healthy)
+    assert abs(med) < 0.1 and abs(sd - 1) < 0.1
+    s = np.r_[rng.normal(size=500), rng.normal(size=500) + 1.5]
+    c = L.cusum(s, med, sd)
+    assert (c >= 0).all()
+    assert c[:500].max() < 15 and c[-1] > 300   # drift of about (1.5 - 0.5) per row
+    assert L.robust_scale(np.ones(10))[1] > 0   # constant calibration score: no division by 0
+
+
+def test_variants_with_rules_adds_ewma_and_cusum():
+    prep = _toy_prepared()
+    prep.op = np.random.default_rng(1).normal(size=(400, 4))
+    prep.cal_a, prep.cal_b = np.arange(200, 250), np.arange(250, 300)
+    score = np.abs(np.random.default_rng(2).normal(size=400)) + 0.1
+    v = L.variants(score, prep, rules=True)
+    assert set(v) == {"raw", "smooth", "cn", "cn_smooth", *L.RULE_VARIANTS}
+    assert all(len(x) == 400 and np.isfinite(x).all() for x in v.values())
+    assert set(L.variants(score, prep)) == {"raw", "smooth", "cn", "cn_smooth"}
+
+
+def test_condition_model_learns_load_dependent_channels():
+    rng = np.random.default_rng(0)
+    U = rng.normal(size=(1500, 4)).astype(np.float32)
+    X = np.column_stack([2 * U[:, 0], U[:, 1] * U[:, 2], rng.normal(size=1500)]).astype(np.float32)
+    fn, log = L.train_condition_model(U[:1000], X[:1000], U[1000:1200], X[1000:1200], epochs=30)
+    err = fn(U, X)
+    assert err.shape == X.shape and np.isfinite(err).all() and 1 <= len(log) <= 30
+    # the explained channel is reconstructed far better than pure noise
+    assert err[1200:, 0].mean() < 0.2 * err[1200:, 2].mean()
+
+
+def test_sensor_fault_kinds():
+    X = np.zeros((20, 4), np.float32)
+    X[:, 1] = np.arange(20)
+    rows = np.arange(10, 20)
+    fill = np.full(4, 7.0, np.float32)
+    area = np.array([1, 2])
+    d = L.sensor_fault(X, rows, "drift", 1, area, fill)
+    assert np.allclose(d[:10], X[:10]) and d[19, 1] == pytest.approx(19 + L.DRIFT_SD)
+    st = L.sensor_fault(X, rows, "stuck", 1, area, fill)
+    assert (st[10:, 1] == 10).all() and (st[:10, 1] == X[:10, 1]).all()
+    dr = L.sensor_fault(X, rows, "dropout", 1, area, fill)
+    assert (dr[10:, 1:3] == 7).all() and (dr[:10] == X[:10]).all() and (dr[:, [0, 3]] == 0).all()
+    assert (X[:, 0] == 0).all()                       # input untouched
+    with pytest.raises(ValueError):
+        L.sensor_fault(X, rows, "spike", 1, area, fill)
+
+
+def test_pick_fault_channel_is_fixed_and_skips_environment():
+    cols = ["a", "b", "c", "d"]
+    sub = {"a": "ENVIRONMENT", "b": "GEARBOX", "c": "OTHER", "d": "COOLING"}
+    picks = {L.pick_fault_channel(cols, sub, e) for e in range(30)}
+    assert picks <= {1, 3} and L.pick_fault_channel(cols, sub, 5) == L.pick_fault_channel(cols, sub, 5)
+    assert L.pick_fault_channel(["a"], {"a": "OTHER"}, 1) is None
+    only_d = {L.pick_fault_channel(["b_avg", "d_avg"], {"b_avg": "GEARBOX", "d_avg": "COOLING"},
+                                   e, exclude={"b"}) for e in range(20)}
+    assert only_d == {1}                               # operating sensors are never corrupted
+
+
+def test_window_ratios_and_sensorfault_table():
+    prep = _toy_prepared()
+    err = np.ones((400, 3))
+    err[300:, 2] = 9.0
+    r = L.window_ratios(err, prep, np.arange(300, 400))
+    assert np.argmax(r) == 2 and r[2] == pytest.approx(9.0, rel=1e-6)
+    import merge_results as M
+    sf = pd.DataFrame([dict(kind="drift", base="ae_s0", label="normal", channel_rank=1,
+                            area_rank=1, n_channels=50),
+                       dict(kind="drift", base="ae_s0", label="normal", channel_rank=4,
+                            area_rank=2, n_channels=50),
+                       dict(kind="drift", base="ae_s0", label="anomaly", channel_rank=9,
+                            area_rank=5, n_channels=50)])
+    t = M.sensorfault_table(sf)
+    row = t.iloc[0]
+    assert row.n == 2 and row.channel_top1 == 0.5 and row.area_top1 == 0.5 and row.area_top3 == 1.0

@@ -15,6 +15,25 @@ Zenodo and ends with a zip in the Output tab.
 A 10-hour guard stops new datasets from starting late, so the tables and the zip are always
 written before Kaggle's 12-hour limit.
 
+## Run C: polish experiments (optional, one notebook)
+Adds three experiments on all 95 datasets, with every setting fixed in advance:
+
+- **Alarm rules:** EWMA (6 h span) and CUSUM (one-sided, k = 0.5 robust s.d. of the C_b score)
+  as alternatives to the 6 h median, for every detector; threshold and counter unchanged.
+- **Condition model (NBM):** an MLP 4-64-256-d that predicts every channel from the four
+  operating conditions (3 seeds), scored and attributed like the AE.
+- **Sensor faults:** in the prediction window one channel drifts to +3 s.d., freezes, or its
+  whole plant area drops out (imputed with the training median); AE seed 0 and NBM seed 0
+  rescore without retraining. The channel is drawn with the event id as seed, never an
+  operating-condition sensor.
+
+```python
+!python pipeline/run_all.py --detectors polish --data-dir /tmp/care --out /tmp/results_c --zip /kaggle/working/results_v4.zip
+```
+Output: `results_v4.zip` (tables) and `results_v4_scores.zip`. New tables: `sensorfault.csv`,
+`attribution_nbm.csv`; the alarm rules appear as variants `raw_ewma`, `raw_cusum`, `cn_ewma`,
+`cn_cusum` in `care.csv`, `lofo.csv` and `bootstrap.csv`.
+
 ## Notebook settings
 - Settings → **Internet on** (phone-verified account)
 - Accelerator → **GPU T4**
@@ -27,7 +46,7 @@ written before Kaggle's 12-hour limit.
 %cd /tmp/repo
 !python -m pytest -q tests
 ```
-The tests must report `39 passed`.
+The tests must report `46 passed`.
 
 ## Cell 2: run
 Run A:
@@ -42,14 +61,14 @@ Run B:
 ## Cell 3: download links
 ```python
 from IPython.display import FileLink, display
-for f in ("results_v3.zip", "results_v3_scores.zip"):          # run B: results_v3_lstm*.zip
+for f in ("results_v3.zip", "results_v3_scores.zip"):  # run B: results_v3_lstm*.zip, run C: results_v4*.zip
     display(FileLink(f))
 ```
 
 ## Merging run A and run B
 Unzip both score archives, then:
 ```bash
-python pipeline/merge_results.py --inputs A/results_v3/benchmark B/results_v3/benchmark --out results/tables
+python pipeline/merge_results.py --inputs A/results_v3/benchmark B/results_v3_lstm/benchmark --out results/tables
 python pipeline/make_figures.py --tables results/tables --out figures
 ```
 Datasets are matched by farm and event id, and the script checks that both runs saw the
