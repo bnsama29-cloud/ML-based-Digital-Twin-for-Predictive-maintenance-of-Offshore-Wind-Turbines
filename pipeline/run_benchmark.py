@@ -16,6 +16,8 @@ Run D (--detectors arch): the AE in 6 configurations (3 sizes x 2 learning rates
 architecture search, analysed by arch_select.py.
 Run E (--detectors thermal): physics-structured thermal model of component temperatures and
 the AE (seed 0), with attribution over the same temperature channels.
+Run F (--detectors avg): AE, IF (3 seeds each), PCA and 3-sigma on average values only.
+Run G (--detectors final): run D and run F together on every dataset.
 
 Normally called by run_all.py. Resumable: datasets with an existing scores file are skipped.
 """
@@ -97,6 +99,74 @@ def store_scores(df, prep, ev, eid, farm, bases):
                 n_features=len(prep.columns), n_fit=int(len(prep.fit_idx)),
                 n_filtered=int(prep.n_filtered), thresholds=thresholds)
     return store, meta
+
+
+def run_dataset_final(eid, farm, ev, feats, a):
+    """Run G (final): run D (architecture search, all statistics) and run F (average values
+    only) on the same dataset, loaded once."""
+    df = L.load_dataset(eid, a.data_dir, farm)
+    bases, logs = {}, []
+    prep = L.prepare(df, feats, farm=farm, train_filter=True)
+    X = prep.X
+    for name, (widths, lr) in L.ARCH_CONFIGS.items():
+        errfn, log = L.train_autoencoder(X[prep.fit_idx], X[prep.val_idx], seed=0, lr=lr,
+                                         epochs=a.epochs, widths=widths)
+        bases[f"{name}_s0"] = (errfn(X).mean(axis=1), prep)
+        logs += [dict(event_id=eid, farm=farm, base=f"{name}_s0", epoch=e, train=t, val=v)
+                 for e, t, v in log]
+    pa = L.prepare(df, feats, farm=farm, train_filter=True, avg_only=True)
+    Xa = pa.X
+    col_sub = L.column_subsystems(pa.columns, feats)
+    chans = []
+    for seed in AE_SEEDS:
+        errfn, log = L.train_autoencoder(Xa[pa.fit_idx], Xa[pa.val_idx], seed=seed,
+                                         epochs=a.epochs)
+        ch = errfn(Xa)
+        bases[f"ae_avg_s{seed}"] = (ch.mean(axis=1), pa)
+        logs += [dict(event_id=eid, farm=farm, base=f"ae_avg_s{seed}", epoch=e, train=t, val=v)
+                 for e, t, v in log]
+        if ev["event_label"] == "anomaly":
+            r = L.channel_ratios(ch, pa, ev)
+            if r is not None:
+                chans.append(pd.DataFrame(dict(event_id=eid, farm=farm, seed=seed,
+                                               column=pa.columns, ratio=r,
+                                               subsystem=[col_sub[c] for c in pa.columns])))
+        bases[f"iforest_avg_s{seed}"] = (L.score_isolation_forest(Xa[pa.fit_idx], Xa, seed=seed),
+                                         pa)
+    bases["pca_avg"] = (L.score_pca(Xa[pa.fit_idx], Xa), pa)
+    bases["three_sigma_avg"] = (L.score_three_sigma(Xa), pa)
+    store, meta = store_scores(df, prep, ev, eid, farm, bases)
+    meta["n_features_avg"] = len(pa.columns)
+    return store, meta, logs, chans
+
+
+def run_dataset_avg(eid, farm, ev, feats, a):
+    """Run F: the main detectors on average values only (min / max / std dropped, as the
+    dataset authors recommend): AE (3 seeds), IF (3 seeds), PCA, 3-sigma."""
+    df = L.load_dataset(eid, a.data_dir, farm)
+    prep = L.prepare(df, feats, farm=farm, train_filter=True, avg_only=True)
+    X = prep.X
+    col_sub = L.column_subsystems(prep.columns, feats)
+    bases, logs, chans = {}, [], []
+    for seed in AE_SEEDS:
+        errfn, log = L.train_autoencoder(X[prep.fit_idx], X[prep.val_idx], seed=seed,
+                                         epochs=a.epochs)
+        ch = errfn(X)
+        bases[f"ae_avg_s{seed}"] = (ch.mean(axis=1), prep)
+        logs += [dict(event_id=eid, base=f"ae_avg_s{seed}", epoch=e, train=t, val=v)
+                 for e, t, v in log]
+        if ev["event_label"] == "anomaly":
+            r = L.channel_ratios(ch, prep, ev)
+            if r is not None:
+                chans.append(pd.DataFrame(dict(event_id=eid, farm=farm, seed=seed,
+                                               column=prep.columns, ratio=r,
+                                               subsystem=[col_sub[c] for c in prep.columns])))
+        bases[f"iforest_avg_s{seed}"] = (L.score_isolation_forest(X[prep.fit_idx], X, seed=seed),
+                                         prep)
+    bases["pca_avg"] = (L.score_pca(X[prep.fit_idx], X), prep)
+    bases["three_sigma_avg"] = (L.score_three_sigma(X), prep)
+    store, meta = store_scores(df, prep, ev, eid, farm, bases)
+    return store, meta, logs, chans
 
 
 def run_dataset_thermal(eid, farm, ev, feats, a):
@@ -339,7 +409,8 @@ def main():
     ap.add_argument("--events", type=int, nargs="*", help="run only these event ids")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--keep-files", action="store_true", help="do not delete downloaded csv")
-    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch", "thermal"],
+    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch", "thermal", "avg",
+                                            "final"],
                     default="main",
                     help="main = run A (all v3 detectors); lstm = run B (LSTM autoencoder only); "
                          "polish = run C (AE, NBM, IF, PCA, 3-sigma with EWMA/CUSUM rules and "
@@ -391,6 +462,14 @@ def run_one(farm, events, feats, eid, a, sdir, t_start):
     if a.detectors == "lstm":
         (store, meta), logs, chans = run_dataset_lstm(eid, farm, ev, feats, a)
         sides = [(os.path.join(a.out, "timing.csv"), pd.DataFrame(chans))]
+    elif a.detectors == "final":
+        store, meta, logs, chans = run_dataset_final(eid, farm, ev, feats, a)
+        sides = [(os.path.join(a.out, "channels_avg.csv"),
+                  pd.concat(chans) if chans else pd.DataFrame())]
+    elif a.detectors == "avg":
+        store, meta, logs, chans = run_dataset_avg(eid, farm, ev, feats, a)
+        sides = [(os.path.join(a.out, "channels_avg.csv"),
+                  pd.concat(chans) if chans else pd.DataFrame())]
     elif a.detectors == "thermal":
         store, meta, logs, (ch_th, ch_ae) = run_dataset_thermal(eid, farm, ev, feats, a)
         sides = [(os.path.join(a.out, "channels_thermal.csv"),
@@ -418,7 +497,8 @@ def run_one(farm, events, feats, eid, a, sdir, t_start):
     with open(os.path.join(sdir, f"{farm}_{eid}.json"), "w") as f:
         json.dump(meta, f)
     np.savez_compressed(npz, **store)        # written last: marks the dataset done
-    k0 = {"lstm": "lstm_s0|cn_smooth", "arch": f"{L.ARCH_REFERENCE}_s0|cn_smooth"}.get(
+    k0 = {"lstm": "lstm_s0|cn_smooth", "arch": f"{L.ARCH_REFERENCE}_s0|cn_smooth",
+          "avg": "ae_avg_s0|cn_smooth", "final": "ae_avg_s0|cn_smooth"}.get(
         a.detectors, "ae_s0|cn_smooth")
     crit = L.criticality(store[k0] > meta["thresholds"][k0], store["eval_normal"]).max()
     print(f"farm {farm} event {eid} ({meta['label']}): {meta['n_features']} features, "
@@ -426,8 +506,11 @@ def run_one(farm, events, feats, eid, a, sdir, t_start):
           f"{time.time() - t0:.0f}s", flush=True)
     if not a.keep_files and (a.detectors != "main" or eid not in KEEP_ON_DISK):
         f = L.dataset_path(eid, a.data_dir, farm)
-        if os.path.exists(f):
-            os.remove(f)
+        try:                                  # a read-only Kaggle input folder is left alone
+            if os.path.exists(f):
+                os.remove(f)
+        except OSError:
+            pass
     return True
 
 

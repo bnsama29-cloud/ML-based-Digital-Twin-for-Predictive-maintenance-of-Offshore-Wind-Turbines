@@ -85,7 +85,13 @@ def farm_file(name: str, data_dir: str, farm: str = "C") -> str:
 
     name: 'event_info.csv', 'feature_description.csv' or 'datasets/<id>.csv'.
     """
-    roots = [os.path.join(data_dir, farm_prefix(farm))]
+    import glob
+    roots = [os.path.join(data_dir, farm_prefix(farm)),
+             os.path.join(data_dir, f"Wind Farm {farm}")]
+    # an attached Kaggle dataset may add one or two folder levels (e.g. /kaggle/input/<name>/...)
+    roots += sorted(glob.glob(os.path.join(data_dir, "*", farm_prefix(farm))))
+    roots += sorted(glob.glob(os.path.join(data_dir, "*", "*", farm_prefix(farm))))
+    roots += sorted(glob.glob(os.path.join(data_dir, "*", f"Wind Farm {farm}")))
     if farm == "C":
         roots.insert(0, data_dir)
     for root in roots:
@@ -217,14 +223,18 @@ def operating_matrix(df: pd.DataFrame, farm: str, rows: np.ndarray) -> np.ndarra
     return np.where(np.isnan(Z), med, Z)
 
 
+STAT_SUFFIX = re.compile(r"_(min|max|std)$")
+
+
 def prepare(df: pd.DataFrame, features: pd.DataFrame, max_missing: float = 0.30,
-            farm: str = "C", train_filter: bool = False) -> Prepared:
+            farm: str = "C", train_filter: bool = False, avg_only: bool = False) -> Prepared:
     """Leakage rules: every statistic is fitted on normal-status TRAINING rows only.
 
     Dropped: metadata columns (id, asset_id, status_type_id ...), angle sensors (wrap at 360),
     counter sensors (cumulative energy), columns with > max_missing NaN in training, and
     columns constant in training. With train_filter, idle training rows (good wind, almost no
-    power) are excluded as well.
+    power) are excluded as well. With avg_only, the min / max / std statistics are dropped and
+    only average values are kept (the dataset authors list min / max / std as unreliable).
     Farm A status codes were reconstructed from a logbook: they select training rows, but
     evaluation treats every farm-A row as normal-status (CARE reference implementation).
     """
@@ -247,6 +257,8 @@ def prepare(df: pd.DataFrame, features: pd.DataFrame, max_missing: float = 0.30,
     half = len(val_idx) // 2
 
     cols = [c for c in df.columns if c not in META_COLS]
+    if avg_only:
+        cols = [c for c in cols if not STAT_SUFFIX.search(c)]
     skip = _flag(features, "is_angle") | _flag(features, "is_counter")
     cols = [c for c in cols if base_sensor(c) not in skip]
     raw = df[cols].apply(pd.to_numeric, errors="coerce")

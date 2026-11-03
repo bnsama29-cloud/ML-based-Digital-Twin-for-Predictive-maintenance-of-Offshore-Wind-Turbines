@@ -52,12 +52,14 @@ def main():
                     help="stop starting new datasets after this many hours (Kaggle stops at 12)")
     ap.add_argument("--events", type=int, nargs="*", help="test on a few event ids only")
     ap.add_argument("--epochs", type=int, default=40)
-    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch", "thermal"],
+    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch", "thermal", "avg",
+                                            "final"],
                     default="main",
                     help="main = run A; lstm = run B (LSTM AE + timing, no case studies); "
                          "polish = run C (alarm rules, condition model, sensor faults); "
                          "arch = run D (per-farm architecture search); "
-                         "thermal = run E (physics-structured thermal model)")
+                         "thermal = run E (physics-structured thermal model); "
+                         "avg = run F (average values only); final = run G (D + F)")
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     bench = os.path.join(a.out, "benchmark")
@@ -81,7 +83,7 @@ def main():
                       "--epochs", str(a.epochs), "--out", case], failures)
         step("result tables", [os.path.join(here, "merge_results.py"), "--inputs", bench,
                               "--out", tables], failures)
-        if a.detectors == "arch":
+        if a.detectors in ("arch", "final"):
             step("architecture search", [os.path.join(here, "arch_select.py"), "--inputs", bench,
                                          "--out", tables], failures)
     finally:

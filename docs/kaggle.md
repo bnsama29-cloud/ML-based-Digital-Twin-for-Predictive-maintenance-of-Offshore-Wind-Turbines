@@ -64,6 +64,22 @@ on 10 PCA components, 3 seeds.
 Output: `results_v6.zip` with `care.csv` (methods `ae`, `thermal`, `ae_temp`),
 `attribution_thermal.csv`, `attribution_ae_temp.csv`, `complement.csv` (about 3.5-4 h on a T4).
 
+## Run F / run G: average values only (+ architecture search)
+The dataset authors list the min / max / std statistics as unreliable (Zenodo record, "Known Data
+Issues"). Run F (`--detectors avg`) repeats AE, IF (3 seeds each), PCA and 3-sigma on average
+values only; run G (`--detectors final`) does run F and run D (architecture search) together on
+every dataset, so one run covers both.
+
+```python
+!python pipeline/run_all.py --detectors final --data-dir /tmp/care --out /tmp/results_g --zip /kaggle/working/results_v7.zip
+```
+
+## Using an attached copy of the data instead of Zenodo
+If the data are attached as a Kaggle dataset (unzipped `CARE_To_Compare` folder), pass its folder
+as `--data-dir`, e.g. `--data-dir /kaggle/input`; files are found one or two levels down and are
+never deleted. Without a local copy, files are fetched from Zenodo; a failed download is retried
+for about 20 minutes, the dataset is skipped, and it is tried again at the end of the run.
+
 ## Notebook settings
 - Settings → **Internet on** (phone-verified account)
 - Accelerator → **GPU T4**
@@ -76,7 +92,7 @@ Output: `results_v6.zip` with `care.csv` (methods `ae`, `thermal`, `ae_temp`),
 %cd /tmp/repo
 !python -m pytest -q tests
 ```
-The tests must report `54 passed`.
+The tests must report `56 passed`.
 
 ## Cell 2: run
 Run A:

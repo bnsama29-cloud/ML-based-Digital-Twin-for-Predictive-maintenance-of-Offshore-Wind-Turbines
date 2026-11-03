@@ -156,7 +156,8 @@ def keys_of(raw, method, var):
     return sorted(k for k in keys if k.endswith("|" + var) and L.split_key(k.split("|")[0])[0] == method)
 
 
-MAIN_CONFIGS = [(m, v) for m in ("ae", "cae", "lstm", "pca", "iforest", "nbm")
+MAIN_CONFIGS = [(m, v) for m in ("ae", "cae", "lstm", "pca", "iforest", "nbm", "ae_avg", "pca_avg",
+                                  "iforest_avg")
                 for v in (*L.VARIANTS, *L.RULE_VARIANTS)]
 
 
@@ -257,10 +258,17 @@ PAIRS = [("ae|smooth", "ae|raw"), ("ae|cn", "ae|raw"), ("ae|cn_smooth", "ae|smoo
          ("ae_hist25|cn_smooth", "ae|cn_smooth"), ("ae_hist50|cn_smooth", "ae|cn_smooth"),
          ("ae_hist25|raw", "ae|raw"), ("ae_hist50|raw", "ae|raw"),
          ("nsa|cn_smooth", "ae|cn_smooth"), ("nsa|cn_smooth", "pca|cn_smooth"),
-         ("nsa|raw", "ae|raw")]
+         ("nsa|raw", "ae|raw"),
+         # run F: average values only, against the same detector on all statistics (run A)
+         ("ae_avg|cn_smooth", "ae|cn_smooth"), ("ae_avg|raw", "ae|raw"),
+         ("ae_avg|smooth", "ae|smooth"),
+         ("pca_avg|cn_smooth", "pca|cn_smooth"), ("pca_avg|raw", "pca|raw"),
+         ("iforest_avg|cn_smooth", "iforest|cn_smooth"),
+         ("three_sigma_avg|cn_smooth", "three_sigma|cn_smooth")]
 
 
-ATTR_LABEL = {"nbm": "NBM", "thermal": "Thermal", "ae_temp": "AE (temperatures)"}
+ATTR_LABEL = {"nbm": "NBM", "thermal": "Thermal", "ae_temp": "AE (temperatures)",
+              "avg": "AE (averages only)"}
 
 
 def complement_table(raw, a_key="ae_s0", b_key="thermal", variant="cn_smooth") -> pd.DataFrame:

@@ -552,3 +552,33 @@ def test_benchmark_skips_a_failed_download_and_retries_it(tmp_path, monkeypatch,
     assert calls == [1, 2, 3, 2]                     # 2 failed, the rest went on, 2 retried
     out = capsys.readouterr().out
     assert "FAILED" in out and "second pass over 1" in out and "still failed" not in out
+
+
+def test_prepare_avg_only_drops_min_max_std():
+    n = 300
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"time_stamp": pd.date_range("2023-01-01", periods=n, freq="10min"),
+                       "id": np.arange(n), "asset_id": 1,
+                       "train_test": np.where(np.arange(n) < 200, "train", "prediction"),
+                       "status_type_id": 0,
+                       "s1_avg": rng.normal(size=n), "s1_max": rng.normal(size=n),
+                       "s1_min": rng.normal(size=n), "s1_std": rng.normal(size=n),
+                       "s2_avg": rng.normal(size=n), "sensor_44": rng.normal(size=n)})
+    feats = pd.DataFrame(dict(description=["a", "b", "c"], is_angle=False, is_counter=False),
+                         index=["s1", "s2", "sensor_44"])
+    full = L.prepare(df, feats, farm="C")
+    avg = L.prepare(df, feats, farm="C", avg_only=True)
+    assert set(full.columns) == {"s1_avg", "s1_max", "s1_min", "s1_std", "s2_avg", "sensor_44"}
+    assert set(avg.columns) == {"s1_avg", "s2_avg", "sensor_44"}
+
+
+def test_farm_file_finds_an_attached_copy_without_downloading(tmp_path, monkeypatch):
+    nested = tmp_path / "care-to-compare" / "CARE_To_Compare" / "Wind Farm B" / "datasets"
+    nested.mkdir(parents=True)
+    (nested / "7.csv").write_text("x")
+    monkeypatch.setattr(L, "fetch_member", lambda *a, **k: pytest.fail("must not download"))
+    assert L.farm_file("datasets/7.csv", str(tmp_path), "B") == str(nested / "7.csv")
+    flat = tmp_path / "Wind Farm A" / "datasets"
+    flat.mkdir(parents=True)
+    (flat / "0.csv").write_text("x")
+    assert L.farm_file("datasets/0.csv", str(tmp_path), "A") == str(flat / "0.csv")
