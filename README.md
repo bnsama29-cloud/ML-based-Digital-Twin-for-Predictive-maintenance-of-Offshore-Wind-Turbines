@@ -68,6 +68,22 @@ periods; 0.5 = random predictions; the benchmark's per-farm tuned AE reports 0.6
 - **Cost:** every detector trains in under 25 s per turbine-year on a T4 GPU and scores
   1000 rows in about 10 ms or less (AE, PCA, Isolation Forest).
 
+### Follow-up experiments (settings fixed in advance)
+| Question | Run | Result |
+|---|---|---|
+| Better alarm rule than the 6 h median? | C | EWMA +0.018 for the AE (CI 0.001 to 0.039, not robust to multiple comparisons); CUSUM triples false alarms |
+| Does a model of the operating point suffice? | C | multi-target MLP from wind, power, rotor speed, ambient: level with the AE only after normalisation and smoothing; weaker attribution (33 % vs 38 %) |
+| Can attribution spot a broken sensor? | C | a drifting / frozen channel is ranked first of all channels in 76 % / 54 % of normal periods |
+| Physics instead of deep learning? | E | thermal model (losses from power, power², rotor speed; cooling to ambient; 1 h and 6 h lags): CARE 0.556 vs 0.580 for the AE, fewer false alarms; 7 faults found by both, 6 by the AE alone, 3 by the thermal model alone |
+| Bio-inspired detector? | E | negative selection (V-detector): 0.501, clearly worse (−0.080, CI −0.136 to −0.020) |
+| How much healthy history is needed? | E | latest quarter of the training rows (about 3 months): 0.578 vs 0.580 |
+| Does architecture tuning close the gap to 0.66? | G | label-free choice per farm +0.013 (CI −0.016 to 0.045); even an oracle tuning architecture, quantile and counter on the test farm reaches only 0.635 |
+| Do the unreliable min/max/std columns hurt? | G | average values only: overall unchanged (−0.007), farm B 0.580 → 0.622, top-1 attribution 42.5 % |
+
+Retraining moves the AE by at most 0.01 between runs; IF, PCA and 3σ reproduce to four decimals.
+Tables: [`results/followup_run_c`](results/followup_run_c), [`followup_run_e`](results/followup_run_e),
+[`followup_run_g`](results/followup_run_g) (see [`results/README.md`](results/README.md)).
+
 Full tables: [`results/`](results). Figures: [`figures/`](figures).
 
 <p>
@@ -85,7 +101,7 @@ pipeline/          the validated pipeline
                      temperature model and Unity export (farm C)
   merge_results.py   stored scores -> result tables (merges run A and run B)
   make_figures.py    summary figures from the result tables
-  arch_select.py     run D: per-farm architecture choice (label-free, other farms, oracle)
+  arch_select.py     architecture choice: label-free, other farms, oracle ceiling (runs D, G)
   run_all.py         everything in one go, ends with a zip
 tests/             unit tests (57) for the library and the merge step
 results/           tables and case studies of the final run
