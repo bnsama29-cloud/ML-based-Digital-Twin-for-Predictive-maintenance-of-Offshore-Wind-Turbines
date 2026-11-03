@@ -16,7 +16,9 @@ import wtpm_lib as L
 BASE_LABEL = {"ae": "Autoencoder", "ae_nofilter": "AE, no training filter",
               "cae": "Conditional AE", "ae_sigmoid": "AE, sigmoid output", "lstm": "LSTM AE",
               "iforest": "Isolation Forest", "pca": "PCA", "three_sigma": "3-sigma fraction",
-              "nbm": "Condition model (NBM)"}
+              "nbm": "Condition model (NBM)", "nsa": "Negative selection",
+              "thermal": "Thermal model", "ae_temp": "AE (temperatures)",
+              "ae_hist25": "AE, latest 25 % of history", "ae_hist50": "AE, latest 50 % of history"}
 VAR_LABEL = {"raw": "raw", "smooth": "+ smoothing", "cn": "+ condition norm.",
              "cn_smooth": "+ cond. norm. + smoothing", "raw_ewma": "+ EWMA",
              "raw_cusum": "+ CUSUM", "cn_ewma": "+ cond. norm. + EWMA",
@@ -253,7 +255,9 @@ PAIRS = [("ae|smooth", "ae|raw"), ("ae|cn", "ae|raw"), ("ae|cn_smooth", "ae|smoo
          ("thermal|cn_smooth", "ae|cn_smooth"), ("thermal|raw", "ae|raw"),
          ("ae_temp|cn_smooth", "ae|cn_smooth"),
          ("ae_hist25|cn_smooth", "ae|cn_smooth"), ("ae_hist50|cn_smooth", "ae|cn_smooth"),
-         ("ae_hist25|raw", "ae|raw"), ("ae_hist50|raw", "ae|raw")]
+         ("ae_hist25|raw", "ae|raw"), ("ae_hist50|raw", "ae|raw"),
+         ("nsa|cn_smooth", "ae|cn_smooth"), ("nsa|cn_smooth", "pca|cn_smooth"),
+         ("nsa|raw", "ae|raw")]
 
 
 ATTR_LABEL = {"nbm": "NBM", "thermal": "Thermal", "ae_temp": "AE (temperatures)"}

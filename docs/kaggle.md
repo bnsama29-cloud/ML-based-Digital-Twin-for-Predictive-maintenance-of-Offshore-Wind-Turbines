@@ -54,13 +54,15 @@ losses) and rotor-speed fraction, each also through 1 h and 6 h first-order lags
 ridge least squares on healthy fit rows. Its squared residuals give a fault score and a
 plant-area attribution, compared with the AE (seed 0) on the same channels and with an
 "either" rule (AE or thermal). The same run trains the AE on only the most recent 25 % and 50 %
-of the fit rows (`ae_hist25`, `ae_hist50`) to show how much healthy history is needed.
+of the fit rows (`ae_hist25`, `ae_hist50`) to show how much healthy history is needed, and an
+immune-inspired negative-selection detector (`nsa`, V-detector of Ji and Dasgupta, GECCO 2004)
+on 10 PCA components, 3 seeds.
 
 ```python
 !python pipeline/run_all.py --detectors thermal --data-dir /tmp/care --out /tmp/results_e --zip /kaggle/working/results_v6.zip
 ```
 Output: `results_v6.zip` with `care.csv` (methods `ae`, `thermal`, `ae_temp`),
-`attribution_thermal.csv`, `attribution_ae_temp.csv`, `complement.csv` (about 3 h on a T4).
+`attribution_thermal.csv`, `attribution_ae_temp.csv`, `complement.csv` (about 3.5-4 h on a T4).
 
 ## Notebook settings
 - Settings → **Internet on** (phone-verified account)
@@ -74,7 +76,7 @@ Output: `results_v6.zip` with `care.csv` (methods `ae`, `thermal`, `ae_temp`),
 %cd /tmp/repo
 !python -m pytest -q tests
 ```
-The tests must report `52 passed`.
+The tests must report `53 passed`.
 
 ## Cell 2: run
 Run A:

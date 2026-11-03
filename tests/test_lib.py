@@ -519,3 +519,16 @@ def test_recent_rows_keeps_the_latest_fraction_in_order():
     assert L.recent_rows(idx, 0.5).tolist() == [13, 21, 34, 55, 89][1:]
     assert L.recent_rows(idx, 0.01).tolist() == [89]           # never empty
     assert L.recent_rows(idx, 1.0).tolist() == idx.tolist()
+
+
+def test_negative_selection_flags_points_outside_self():
+    rng = np.random.default_rng(0)
+    X_fit = rng.normal(size=(3000, 5)).astype(np.float32)
+    X = np.vstack([rng.normal(size=(200, 5)), rng.normal(size=(200, 5)) + 6]).astype(np.float32)
+    s = L.score_negative_selection(X_fit, X, seed=0, k=3, n_self=1000, n_det=300)
+    assert s.shape == (400,) and np.isfinite(s).all()
+    assert (s > 0).all() and np.median(s[:200]) < 1            # positive; healthy rows inside self
+    assert np.median(s[200:]) > np.quantile(s[:200], 0.99)     # shifted rows beat a 99th-pct threshold
+    assert (s[200:] > np.quantile(s[:200], 0.99)).mean() > 0.7
+    s2 = L.score_negative_selection(X_fit, X, seed=0, k=3, n_self=1000, n_det=300)
+    assert np.allclose(s, s2)                                 # deterministic for a seed

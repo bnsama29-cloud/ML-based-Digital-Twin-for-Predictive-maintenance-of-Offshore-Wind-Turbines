@@ -807,6 +807,60 @@ THERMAL_SPANS = (6, 36)          # 1 h and 6 h first-order lags (10-min rows)
 THERMAL_RIDGE = 1e-3
 
 
+# ------------------------------------------------------- run E: negative selection (immune-inspired)
+# Real-valued negative selection with variable-sized detectors (V-detector, Ji and Dasgupta,
+# GECCO 2004). Fixed before the run: 10 PCA components of the fit rows, min-max scaled with the
+# 0.5 / 99.5 percentiles of the fit rows and clipped to [0, 1], 5000 self samples, self radius = 99th percentile of
+# the self-to-self nearest-neighbour distance, 1000 detectors.
+NSA_COMPONENTS = 10
+NSA_SELF = 5000
+NSA_DETECTORS = 1000
+NSA_MAX_TRIES = 50
+
+
+def score_negative_selection(X_fit: np.ndarray, X: np.ndarray, seed: int = 0,
+                             k: int = NSA_COMPONENTS, n_self: int = NSA_SELF,
+                             n_det: int = NSA_DETECTORS) -> np.ndarray:
+    """Immune-inspired anomaly score. Random candidate detectors in the unit hypercube are kept
+    only if they lie outside the self region (healthy fit rows); each kept detector covers a
+    ball reaching to the self boundary. A row's depth inside its deepest detector (positive =
+    recognised as non-self, negative for healthy rows) is returned as exp(depth / r_self), a
+    positive score whose logarithm is the depth in units of the self radius."""
+    from sklearn.decomposition import PCA
+    from sklearn.neighbors import NearestNeighbors
+    rng = np.random.default_rng(seed)
+    k = int(min(k, X_fit.shape[1], max(1, len(X_fit) - 1)))
+    pca = PCA(n_components=k, random_state=seed).fit(X_fit)
+    Zf, Z = pca.transform(X_fit), pca.transform(X)
+    lo, hi = np.percentile(Zf, 0.5, axis=0), np.percentile(Zf, 99.5, axis=0)
+    span = np.where(hi - lo > 1e-12, hi - lo, 1.0)
+    # unit hypercube; rows beyond the healthy range are clipped onto its faces, where the
+    # detectors live (standard normalisation for real-valued negative selection)
+    Zf, Z = np.clip((Zf - lo) / span, 0, 1), np.clip((Z - lo) / span, 0, 1)
+    self_pts = Zf[rng.choice(len(Zf), min(n_self, len(Zf)), replace=False)]
+    nn_self = NearestNeighbors(n_neighbors=2).fit(self_pts)
+    r_self = float(np.quantile(nn_self.kneighbors(self_pts)[0][:, 1], 0.99))
+    centres, radii = [], []
+    for _ in range(NSA_MAX_TRIES):
+        cand = rng.random((n_det, k))
+        d = nn_self.kneighbors(cand, n_neighbors=1)[0][:, 0]
+        keep = d > r_self
+        centres.append(cand[keep])
+        radii.append(d[keep] - r_self)
+        if sum(len(c) for c in centres) >= n_det:
+            break
+    C = np.concatenate(centres)[:n_det]
+    R = np.concatenate(radii)[:n_det]
+    if len(C) == 0:                                   # self fills the space: no detectors
+        return np.ones(len(X))
+    out = np.empty(len(Z))
+    for i in range(0, len(Z), 4096):                  # depth inside the deepest detector
+        dist = np.linalg.norm(Z[i:i + 4096, None, :] - C[None, :, :], axis=2)
+        out[i:i + 4096] = (R[None, :] - dist).max(axis=1)
+    # positive and order-preserving, so log() in condition normalisation recovers the depth
+    return np.exp(out / max(r_self, 1e-9))
+
+
 HISTORY_FRACTIONS = (0.25, 0.5)  # run E: AE trained on the most recent quarter / half of fit rows
 
 
