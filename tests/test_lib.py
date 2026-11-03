@@ -532,3 +532,23 @@ def test_negative_selection_flags_points_outside_self():
     assert (s[200:] > np.quantile(s[:200], 0.99)).mean() > 0.7
     s2 = L.score_negative_selection(X_fit, X, seed=0, k=3, n_self=1000, n_det=300)
     assert np.allclose(s, s2)                                 # deterministic for a seed
+
+
+def test_benchmark_skips_a_failed_download_and_retries_it(tmp_path, monkeypatch, capsys):
+    import run_benchmark as RB
+    ev = pd.DataFrame(dict(event_id=[1, 2, 3])).set_index("event_id")
+    monkeypatch.setattr(RB.L, "load_event_info", lambda d, f: ev.reset_index())
+    monkeypatch.setattr(RB.L, "load_features", lambda d, f: pd.DataFrame())
+    calls = []
+
+    def fake_run_one(farm, events, feats, eid, a, sdir, t0):
+        calls.append(eid)
+        if eid == 2 and calls.count(2) == 1:
+            raise OSError("503 Service Temporarily Unavailable")
+        return True
+    monkeypatch.setattr(RB, "run_one", fake_run_one)
+    monkeypatch.setattr(sys, "argv", ["run_benchmark.py", "--farms", "A", "--out", str(tmp_path)])
+    RB.main()
+    assert calls == [1, 2, 3, 2]                     # 2 failed, the rest went on, 2 retried
+    out = capsys.readouterr().out
+    assert "FAILED" in out and "second pass over 1" in out and "still failed" not in out

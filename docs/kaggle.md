@@ -76,7 +76,7 @@ Output: `results_v6.zip` with `care.csv` (methods `ae`, `thermal`, `ae_temp`),
 %cd /tmp/repo
 !python -m pytest -q tests
 ```
-The tests must report `53 passed`.
+The tests must report `54 passed`.
 
 ## Cell 2: run
 Run A:

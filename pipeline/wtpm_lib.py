@@ -47,7 +47,7 @@ FARM_PREFIX = farm_prefix("C")   # kept for older scripts
 
 # ---------------------------------------------------------------- data access
 
-def fetch_member(member: str, dest_dir: str, attempts: int = 5, wait_s: float = 30.0) -> str:
+def fetch_member(member: str, dest_dir: str, attempts: int = 8, wait_s: float = 30.0) -> str:
     """Extract one file from the Zenodo zip with HTTP range requests (no 5.5 GB download).
 
     Downloads into a temporary folder and moves the file into place only when complete,
@@ -74,7 +74,7 @@ def fetch_member(member: str, dest_dir: str, attempts: int = 5, wait_s: float = 
                 raise
             print(f"download of {member} failed ({err!r}); retry {attempt}/{attempts - 1}",
                   flush=True)
-            time.sleep(wait_s * attempt)
+            time.sleep(min(wait_s * attempt, 300.0))      # up to ~20 min in total
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     return out

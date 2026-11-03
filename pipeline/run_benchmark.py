@@ -351,62 +351,84 @@ def main():
     sdir = os.path.join(a.out, "scores")
     os.makedirs(sdir, exist_ok=True)
 
+    failed = []                     # (farm, event) whose download or run failed; retried at the end
+    work = []
     for farm in a.farms:
         events = L.load_event_info(a.data_dir, farm).set_index("event_id")
         feats = L.load_features(a.data_dir, farm)
-        ids = [e for e in events.index if not a.events or e in a.events]
-        for eid in ids:
-            npz = os.path.join(sdir, f"{farm}_{eid}.npz")
-            if os.path.exists(npz):
+        work += [(farm, events, feats, e) for e in events.index if not a.events or e in a.events]
+    for attempt in (1, 2):
+        todo, failed = (work if attempt == 1 else failed), []
+        if attempt == 2 and todo:
+            print(f"second pass over {len(todo)} dataset(s) that failed", flush=True)
+        for farm, events, feats, eid in todo:
+            try:
+                ok = run_one(farm, events, feats, eid, a, sdir, t_start)
+            except Exception as err:          # e.g. Zenodo unavailable: skip, retry later
+                print(f"farm {farm} event {eid} FAILED ({err!r}); will retry", flush=True)
+                failed.append((farm, events, feats, eid))
                 continue
-            if a.budget_h and (time.time() - t_start) / 3600 > a.budget_h:
-                print(f"time budget of {a.budget_h} h reached: skipping farm {farm} "
-                      f"event {eid} and the rest", flush=True)
+            if ok is False:                   # time budget reached
                 break
-            t0 = time.time()
-            ev = events.loc[eid].copy()
-            ev["event_id"] = eid
-            if a.detectors == "lstm":
-                (store, meta), logs, chans = run_dataset_lstm(eid, farm, ev, feats, a)
-                sides = [(os.path.join(a.out, "timing.csv"), pd.DataFrame(chans))]
-            elif a.detectors == "thermal":
-                store, meta, logs, (ch_th, ch_ae) = run_dataset_thermal(eid, farm, ev, feats, a)
-                sides = [(os.path.join(a.out, "channels_thermal.csv"),
-                          pd.concat(ch_th) if ch_th else pd.DataFrame()),
-                         (os.path.join(a.out, "channels_ae_temp.csv"),
-                          pd.concat(ch_ae) if ch_ae else pd.DataFrame())]
-            elif a.detectors == "arch":
-                store, meta, logs = run_dataset_arch(eid, farm, ev, feats, a)
-                sides = []
-            elif a.detectors == "polish":
-                store, meta, logs, (chans, nbm_chans, faults) = run_dataset_polish(
-                    eid, farm, ev, feats, a)
-                sides = [(os.path.join(a.out, "channels.csv"),
-                          pd.concat(chans) if chans else pd.DataFrame()),
-                         (os.path.join(a.out, "channels_nbm.csv"),
-                          pd.concat(nbm_chans) if nbm_chans else pd.DataFrame()),
-                         (os.path.join(a.out, "sensorfault.csv"), pd.DataFrame(faults))]
-            else:
-                store, meta, logs, chans = run_dataset(eid, farm, ev, feats, a)
-                sides = [(os.path.join(a.out, "channels.csv"),
-                          pd.concat(chans) if chans else pd.DataFrame())]
-            for path, rows in ((os.path.join(a.out, "trainlog.csv"), pd.DataFrame(logs)), *sides):
-                if len(rows):
-                    rows.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
-            with open(os.path.join(sdir, f"{farm}_{eid}.json"), "w") as f:
-                json.dump(meta, f)
-            np.savez_compressed(npz, **store)        # written last: marks the dataset done
-            k0 = {"lstm": "lstm_s0|cn_smooth", "arch": f"{L.ARCH_REFERENCE}_s0|cn_smooth"}.get(
-                a.detectors, "ae_s0|cn_smooth")
-            crit = L.criticality(store[k0] > meta["thresholds"][k0], store["eval_normal"]).max()
-            print(f"farm {farm} event {eid} ({meta['label']}): {meta['n_features']} features, "
-                  f"{meta['n_filtered']} idle rows filtered, max criticality {crit}, "
-                  f"{time.time() - t0:.0f}s", flush=True)
-            if not a.keep_files and (a.detectors != "main" or eid not in KEEP_ON_DISK):
-                f = L.dataset_path(eid, a.data_dir, farm)
-                if os.path.exists(f):
-                    os.remove(f)
+    if failed:
+        print("still failed after retry: " + ", ".join(f"{f}-{e}" for f, _, _, e in failed),
+              flush=True)
     print("done ->", a.out)
+
+
+def run_one(farm, events, feats, eid, a, sdir, t_start):
+    """Run one dataset; returns False when the time budget stops the run."""
+    npz = os.path.join(sdir, f"{farm}_{eid}.npz")
+    if os.path.exists(npz):
+        return True
+    if a.budget_h and (time.time() - t_start) / 3600 > a.budget_h:
+        print(f"time budget of {a.budget_h} h reached: skipping farm {farm} "
+              f"event {eid} and the rest", flush=True)
+        return False
+    t0 = time.time()
+    ev = events.loc[eid].copy()
+    ev["event_id"] = eid
+    if a.detectors == "lstm":
+        (store, meta), logs, chans = run_dataset_lstm(eid, farm, ev, feats, a)
+        sides = [(os.path.join(a.out, "timing.csv"), pd.DataFrame(chans))]
+    elif a.detectors == "thermal":
+        store, meta, logs, (ch_th, ch_ae) = run_dataset_thermal(eid, farm, ev, feats, a)
+        sides = [(os.path.join(a.out, "channels_thermal.csv"),
+                  pd.concat(ch_th) if ch_th else pd.DataFrame()),
+                 (os.path.join(a.out, "channels_ae_temp.csv"),
+                  pd.concat(ch_ae) if ch_ae else pd.DataFrame())]
+    elif a.detectors == "arch":
+        store, meta, logs = run_dataset_arch(eid, farm, ev, feats, a)
+        sides = []
+    elif a.detectors == "polish":
+        store, meta, logs, (chans, nbm_chans, faults) = run_dataset_polish(
+            eid, farm, ev, feats, a)
+        sides = [(os.path.join(a.out, "channels.csv"),
+                  pd.concat(chans) if chans else pd.DataFrame()),
+                 (os.path.join(a.out, "channels_nbm.csv"),
+                  pd.concat(nbm_chans) if nbm_chans else pd.DataFrame()),
+                 (os.path.join(a.out, "sensorfault.csv"), pd.DataFrame(faults))]
+    else:
+        store, meta, logs, chans = run_dataset(eid, farm, ev, feats, a)
+        sides = [(os.path.join(a.out, "channels.csv"),
+                  pd.concat(chans) if chans else pd.DataFrame())]
+    for path, rows in ((os.path.join(a.out, "trainlog.csv"), pd.DataFrame(logs)), *sides):
+        if len(rows):
+            rows.to_csv(path, mode="a", header=not os.path.exists(path), index=False)
+    with open(os.path.join(sdir, f"{farm}_{eid}.json"), "w") as f:
+        json.dump(meta, f)
+    np.savez_compressed(npz, **store)        # written last: marks the dataset done
+    k0 = {"lstm": "lstm_s0|cn_smooth", "arch": f"{L.ARCH_REFERENCE}_s0|cn_smooth"}.get(
+        a.detectors, "ae_s0|cn_smooth")
+    crit = L.criticality(store[k0] > meta["thresholds"][k0], store["eval_normal"]).max()
+    print(f"farm {farm} event {eid} ({meta['label']}): {meta['n_features']} features, "
+          f"{meta['n_filtered']} idle rows filtered, max criticality {crit}, "
+          f"{time.time() - t0:.0f}s", flush=True)
+    if not a.keep_files and (a.detectors != "main" or eid not in KEEP_ON_DISK):
+        f = L.dataset_path(eid, a.data_dir, farm)
+        if os.path.exists(f):
+            os.remove(f)
+    return True
 
 
 if __name__ == "__main__":
