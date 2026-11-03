@@ -1,0 +1,21 @@
+farm,rule,top1,top1_sd,top3,top3_sd,n_events
+all,"Thermal ratio, mean",0.4,0.0,0.6,0.0,40
+all,"Thermal ratio, sum",0.325,0.0,0.5,0.0,40
+all,"Thermal ratio, vote",0.275,0.0,0.6,0.0,40
+all,always 'PITCH_HUB' (oracle floor),0.3,,0.7,,40
+all,random ranking (expected),0.15098214285714287,,0.44267857142857137,,40
+A,"Thermal ratio, mean",0.4166666666666667,0.0,0.5833333333333334,0.0,12
+A,"Thermal ratio, sum",0.16666666666666666,0.0,0.25,0.0,12
+A,"Thermal ratio, vote",0.08333333333333333,0.0,0.4166666666666667,0.0,12
+A,always 'HYDRAULIC_BRAKE' (oracle floor),0.5,,0.9166666666666666,,12
+A,random ranking (expected),0.14285714285714282,,0.42857142857142855,,12
+B,"Thermal ratio, mean",0.3333333333333333,0.0,1.0,0.0,6
+B,"Thermal ratio, sum",0.3333333333333333,0.0,0.6666666666666666,0.0,6
+B,"Thermal ratio, vote",0.3333333333333333,0.0,1.0,0.0,6
+B,always 'ELECTRICAL' (oracle floor),0.5,,1.0,,6
+B,random ranking (expected),0.19999999999999998,,0.6,,6
+C,"Thermal ratio, mean",0.4090909090909091,0.0,0.5,0.0,22
+C,"Thermal ratio, sum",0.4090909090909091,0.0,0.5909090909090909,0.0,22
+C,"Thermal ratio, vote",0.36363636363636365,0.0,0.5909090909090909,0.0,22
+C,always 'PITCH_HUB' (oracle floor),0.5454545454545454,,0.8636363636363636,,22
+C,random ranking (expected),0.14204545454545456,,0.4074675324675324,,22

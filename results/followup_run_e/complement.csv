@@ -1,0 +1,7 @@
+rule,variant,care,coverage,accuracy,reliability,earliness,detected,n_anomaly,false_alarms,n_normal
+ae_s0,cn_smooth,0.5803530713664586,0.2553091785473992,0.954372146057273,0.52,0.2177118861703479,13,45.0,7.0,50.0
+thermal,cn_smooth,0.5558411472427434,0.19818779278236928,0.9797794152489037,0.47619047619047616,0.14526863674306378,10,45.0,5.0,50.0
+ae_s0 or thermal,cn_smooth,0.5934019714856783,0.31427904901978704,0.9371639828975827,0.5228758169934641,0.25552702561997515,16,45.0,11.0,50.0
+faults detected only by ae_s0,cn_smooth,,,,,,6,,,
+faults detected only by thermal,cn_smooth,,,,,,3,,,
+faults detected by both,cn_smooth,,,,,,7,,,

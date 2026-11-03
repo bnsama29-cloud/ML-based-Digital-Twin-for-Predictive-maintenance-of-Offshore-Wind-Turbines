@@ -1,0 +1,5 @@
+strategy,variant,n,choice,care,detected,false_alarms,diff_vs_reference,ci_lo,ci_hi
+val per farm,raw,95,"{'A': 'arch_l_hi', 'B': 'arch_l_lo', 'C': 'arch_l_lo'}",0.5977199522933303,13,5,0.015709275499785735,-0.005600686893069276,0.04219710776352219
+val per dataset,raw,95,"{'arch_l_hi': 54, 'arch_l_lo': 41}",0.6001667269352957,14,5,0.018156050141751146,-0.0057381361834477,0.04790491755192613
+val per farm,cn_smooth,95,"{'A': 'arch_l_hi', 'B': 'arch_l_lo', 'C': 'arch_l_lo'}",0.6066136976224947,18,8,0.01329968501329204,-0.015823484334665464,0.04529659590551418
+val per dataset,cn_smooth,95,"{'arch_l_hi': 54, 'arch_l_lo': 41}",0.6114805113689097,18,7,0.018166498759706995,-0.014559351494343075,0.05587770097991457

@@ -41,3 +41,17 @@ multi-target normal behaviour model (NBM) with 3 seeds each, Isolation Forest (3
 
 The AE was retrained in this run and moves by at most 0.009 CARE against run A (GPU
 non-determinism); IF, PCA and 3-sigma reproduce run A to four decimals.
+
+## Follow-up run E (`followup_run_e/`)
+`--detectors thermal` (3.64 h, no failed steps): physics-structured thermal model (`thermal`), AE
+seed 0 on all channels (`ae`) and on temperature channels only (`ae_temp`), AE trained on the
+latest 25 % / 50 % of fit rows (`ae_hist25`, `ae_hist50`), immune-inspired negative selection
+(`nsa`, 3 seeds). `complement.csv`: AE, thermal model, "either" rule and faults found by only one.
+
+## Follow-up run G (`followup_run_g/`)
+`--detectors final` (4.03 h, no failed steps): architecture search (6 AE configurations, seed 0)
+and AE / IF / PCA / 3-sigma on average values only (`*_avg`). The rows "val per farm" and
+"val per dataset" in `arch_search.csv` / `arch_bootstrap.csv` were produced before a fix: the
+label-free choice could pick the average-only AE, which is not part of the search. The corrected
+rows, recomputed from `per_event.csv` and the training log with the fixed `arch_select.py`, are in
+`arch_val_selection_corrected.csv`; all other rows are unaffected.
