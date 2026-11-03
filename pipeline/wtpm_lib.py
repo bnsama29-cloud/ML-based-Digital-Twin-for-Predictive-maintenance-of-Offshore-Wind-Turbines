@@ -807,6 +807,15 @@ THERMAL_SPANS = (6, 36)          # 1 h and 6 h first-order lags (10-min rows)
 THERMAL_RIDGE = 1e-3
 
 
+HISTORY_FRACTIONS = (0.25, 0.5)  # run E: AE trained on the most recent quarter / half of fit rows
+
+
+def recent_rows(idx: np.ndarray, frac: float) -> np.ndarray:
+    """The most recent `frac` of the (time-ordered) row indices, at least one row."""
+    idx = np.asarray(idx)
+    return idx[len(idx) - max(1, int(round(frac * len(idx)))):]
+
+
 def temperature_channels(columns: list[str], features: pd.DataFrame, col_sub: dict,
                          exclude: set[str] = frozenset()) -> list[int]:
     """Average-value temperature channels of components (not ambient / environment, not an

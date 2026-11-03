@@ -511,3 +511,11 @@ def test_complement_table_counts_either_rule():
     assert t.loc["ae_s0 or thermal", "detected"] == 2
     assert t.loc["faults detected only by thermal", "detected"] == 1
     assert t.loc["faults detected by both", "detected"] == 0
+
+
+def test_recent_rows_keeps_the_latest_fraction_in_order():
+    idx = np.array([3, 5, 8, 13, 21, 34, 55, 89])
+    assert L.recent_rows(idx, 0.25).tolist() == [55, 89]
+    assert L.recent_rows(idx, 0.5).tolist() == [13, 21, 34, 55, 89][1:]
+    assert L.recent_rows(idx, 0.01).tolist() == [89]           # never empty
+    assert L.recent_rows(idx, 1.0).tolist() == idx.tolist()

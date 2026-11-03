@@ -101,7 +101,8 @@ def store_scores(df, prep, ev, eid, farm, bases):
 
 def run_dataset_thermal(eid, farm, ev, feats, a):
     """Run E: physics-structured thermal model of every component temperature next to the AE
-    (seed 0); both attribute faults over the same temperature channels."""
+    (seed 0); both attribute faults over the same temperature channels. Also the AE trained on
+    only the most recent 25 % / 50 % of the fit rows (how much healthy history is needed)."""
     df = L.load_dataset(eid, a.data_dir, farm)
     prep = L.prepare(df, feats, farm=farm, train_filter=True)
     X = prep.X
@@ -113,6 +114,13 @@ def run_dataset_thermal(eid, farm, ev, feats, a):
     ch = errfn(X)
     bases["ae_s0"] = (ch.mean(axis=1), prep)
     logs += [dict(event_id=eid, base="ae_s0", epoch=e, train=t, val=v) for e, t, v in log]
+    # how much healthy history is needed: AE on the most recent part of the fit rows only
+    for frac in L.HISTORY_FRACTIONS:
+        sub = L.recent_rows(prep.fit_idx, frac)
+        hfn, log = L.train_autoencoder(X[sub], X[prep.val_idx], seed=0, epochs=a.epochs)
+        name = f"ae_hist{int(frac * 100)}_s0"
+        bases[name] = (hfn(X).mean(axis=1), prep)
+        logs += [dict(event_id=eid, base=name, epoch=e, train=t, val=v) for e, t, v in log]
     if tc:
         pred = L.fit_thermal(L.thermal_inputs(prep), X[:, tc], prep.fit_idx)
         th = (X[:, tc] - pred) ** 2

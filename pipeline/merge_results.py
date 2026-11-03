@@ -248,7 +248,12 @@ PAIRS = [("ae|smooth", "ae|raw"), ("ae|cn", "ae|raw"), ("ae|cn_smooth", "ae|smoo
          ("ae|cn_cusum", "ae|cn_smooth"), ("ae|cn_ewma", "ae|cn_smooth"),
          ("ae|raw_cusum", "ae|smooth"), ("ae|raw_ewma", "ae|smooth"),
          ("pca|cn_cusum", "pca|cn_smooth"), ("iforest|cn_cusum", "iforest|cn_smooth"),
-         ("nbm|cn_smooth", "ae|cn_smooth"), ("nbm|smooth", "ae|smooth"), ("nbm|raw", "ae|raw")]
+         ("nbm|cn_smooth", "ae|cn_smooth"), ("nbm|smooth", "ae|smooth"), ("nbm|raw", "ae|raw"),
+         # run E: thermal model and training-history length
+         ("thermal|cn_smooth", "ae|cn_smooth"), ("thermal|raw", "ae|raw"),
+         ("ae_temp|cn_smooth", "ae|cn_smooth"),
+         ("ae_hist25|cn_smooth", "ae|cn_smooth"), ("ae_hist50|cn_smooth", "ae|cn_smooth"),
+         ("ae_hist25|raw", "ae|raw"), ("ae_hist50|raw", "ae|raw")]
 
 
 ATTR_LABEL = {"nbm": "NBM", "thermal": "Thermal", "ae_temp": "AE (temperatures)"}
