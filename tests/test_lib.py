@@ -455,3 +455,59 @@ def test_arch_selection_helpers():
     assert vd == {1: "y", 2: "x"} and vf["A"] in {"x", "y"}
     bt = A.paired_bootstrap(rows["good"], rows["bad"], n_boot=50)
     assert bt["diff"] > 0 and bt["ci_lo"] <= bt["diff"] <= bt["ci_hi"]
+
+
+# ------------------------------------------------------------- run E: thermal model
+
+def test_thermal_model_recovers_first_order_heating_and_flags_a_shift():
+    rng = np.random.default_rng(0)
+    n = 3000
+    amb = 10 + 5 * np.sin(np.arange(n) / 500)
+    p = np.clip(rng.random(n).cumsum() % 1.0, 0, 1)            # varying load fraction
+    # simulated component: heats with P^2 through a 6-h lag, cools to ambient
+    temp = amb + 30 * L.ewma(p ** 2, 36) + rng.normal(0, 0.1, n)
+    prep = _toy_prepared()
+    prep.fit_idx = np.arange(0, 2000)
+    prep.op = np.column_stack([np.full(n, 8.0), p * 2000, p * 15, amb])
+    F = L.thermal_inputs(prep)
+    assert F.shape == (n, 12) and np.allclose(F[prep.fit_idx].mean(axis=0), 0, atol=1e-6)
+    Y = temp[:, None].copy()
+    Y[2500:, 0] += 3.0                                         # fault: 3 degC extra heating
+    pred = L.fit_thermal(F, Y, prep.fit_idx)
+    res = (Y[:, 0] - pred[:, 0]) ** 2
+    assert res[2000:2500].mean() < 0.5                         # healthy, unseen rows: small error
+    assert res[2500:].mean() > 5 * res[2000:2500].mean()       # the shift stands out
+
+
+def test_temperature_channels_selects_component_averages():
+    feats = pd.DataFrame(dict(description=["Ambient temperature", "Temperature oil in gearbox",
+                                           "Generator bearing temperature", "Rotor speed"]),
+                         index=["s0", "s1", "s2", "s3"])
+    cols = ["s0_avg", "s1_avg", "s1_max", "s2_avg", "s3_avg"]
+    sub = {"s0_avg": "ENVIRONMENT", "s1_avg": "GEARBOX", "s1_max": "GEARBOX",
+           "s2_avg": "GENERATOR", "s3_avg": "ROTOR_DRIVETRAIN"}
+    assert L.temperature_channels(cols, feats, sub) == [1, 3]
+    assert L.temperature_channels(cols, feats, sub, exclude={"s2"}) == [1]
+
+
+def test_complement_table_counts_either_rule():
+    import merge_results as M
+    n = 150
+    win = np.r_[np.zeros(50, bool), np.ones(100, bool)]
+    hit = np.r_[np.zeros(50), np.ones(100)].astype(np.float32)
+    raw = []
+    for eid, (a_hit, b_hit) in enumerate([(True, False), (False, True), (False, False)]):
+        data = {"ids": np.arange(n), "eval_normal": np.ones(n, bool), "in_window": win,
+                "ae_s0|cn_smooth": hit * a_hit, "thermal|cn_smooth": hit * b_hit}
+        meta = dict(event_id=eid, farm="A", label="anomaly",
+                    thresholds={"ae_s0|cn_smooth": 0.5, "thermal|cn_smooth": 0.5})
+        raw.append((meta, data))
+    data = {"ids": np.arange(n), "eval_normal": np.ones(n, bool), "in_window": np.zeros(n, bool),
+            "ae_s0|cn_smooth": np.zeros(n, np.float32), "thermal|cn_smooth": np.zeros(n, np.float32)}
+    raw.append((dict(event_id=9, farm="A", label="normal",
+                     thresholds={"ae_s0|cn_smooth": 0.5, "thermal|cn_smooth": 0.5}), data))
+    t = M.complement_table(raw).set_index("rule")
+    assert t.loc["ae_s0", "detected"] == 1 and t.loc["thermal", "detected"] == 1
+    assert t.loc["ae_s0 or thermal", "detected"] == 2
+    assert t.loc["faults detected only by thermal", "detected"] == 1
+    assert t.loc["faults detected by both", "detected"] == 0

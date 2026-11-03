@@ -14,6 +14,8 @@ Run C (--detectors polish): AE, condition model (NBM), IF (3 seeds each), PCA, 3
 score also post-processed with EWMA and CUSUM, plus sensor-fault tests (drift, stuck, dropout).
 Run D (--detectors arch): the AE in 6 configurations (3 sizes x 2 learning rates) for the
 architecture search, analysed by arch_select.py.
+Run E (--detectors thermal): physics-structured thermal model of component temperatures and
+the AE (seed 0), with attribution over the same temperature channels.
 
 Normally called by run_all.py. Resumable: datasets with an existing scores file are skipped.
 """
@@ -95,6 +97,38 @@ def store_scores(df, prep, ev, eid, farm, bases):
                 n_features=len(prep.columns), n_fit=int(len(prep.fit_idx)),
                 n_filtered=int(prep.n_filtered), thresholds=thresholds)
     return store, meta
+
+
+def run_dataset_thermal(eid, farm, ev, feats, a):
+    """Run E: physics-structured thermal model of every component temperature next to the AE
+    (seed 0); both attribute faults over the same temperature channels."""
+    df = L.load_dataset(eid, a.data_dir, farm)
+    prep = L.prepare(df, feats, farm=farm, train_filter=True)
+    X = prep.X
+    col_sub = L.column_subsystems(prep.columns, feats)
+    op_sensors = {L.base_sensor(c) for c in L.OPERATING[farm].values()}
+    tc = L.temperature_channels(prep.columns, feats, col_sub, exclude=op_sensors)
+    bases, logs, ch_th, ch_ae = {}, [], [], []
+    errfn, log = L.train_autoencoder(X[prep.fit_idx], X[prep.val_idx], seed=0, epochs=a.epochs)
+    ch = errfn(X)
+    bases["ae_s0"] = (ch.mean(axis=1), prep)
+    logs += [dict(event_id=eid, base="ae_s0", epoch=e, train=t, val=v) for e, t, v in log]
+    if tc:
+        pred = L.fit_thermal(L.thermal_inputs(prep), X[:, tc], prep.fit_idx)
+        th = (X[:, tc] - pred) ** 2
+        bases["thermal"] = (th.mean(axis=1), prep)
+        bases["ae_temp_s0"] = (ch[:, tc].mean(axis=1), prep)
+        if ev["event_label"] == "anomaly":
+            cols = [prep.columns[i] for i in tc]
+            subs = [col_sub[c] for c in cols]
+            for target, err in ((ch_th, th), (ch_ae, ch[:, tc])):
+                r = L.channel_ratios(err, prep, ev)
+                if r is not None:
+                    target.append(pd.DataFrame(dict(event_id=eid, farm=farm, seed=0, column=cols,
+                                                    ratio=r, subsystem=subs)))
+    store, meta = store_scores(df, prep, ev, eid, farm, bases)
+    meta["n_temperature_channels"] = len(tc)
+    return store, meta, logs, (ch_th, ch_ae)
 
 
 def run_dataset_arch(eid, farm, ev, feats, a):
@@ -294,7 +328,8 @@ def main():
     ap.add_argument("--events", type=int, nargs="*", help="run only these event ids")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--keep-files", action="store_true", help="do not delete downloaded csv")
-    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch"], default="main",
+    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch", "thermal"],
+                    default="main",
                     help="main = run A (all v3 detectors); lstm = run B (LSTM autoencoder only); "
                          "polish = run C (AE, NBM, IF, PCA, 3-sigma with EWMA/CUSUM rules and "
                          "sensor-fault tests)")
@@ -323,6 +358,12 @@ def main():
             if a.detectors == "lstm":
                 (store, meta), logs, chans = run_dataset_lstm(eid, farm, ev, feats, a)
                 sides = [(os.path.join(a.out, "timing.csv"), pd.DataFrame(chans))]
+            elif a.detectors == "thermal":
+                store, meta, logs, (ch_th, ch_ae) = run_dataset_thermal(eid, farm, ev, feats, a)
+                sides = [(os.path.join(a.out, "channels_thermal.csv"),
+                          pd.concat(ch_th) if ch_th else pd.DataFrame()),
+                         (os.path.join(a.out, "channels_ae_temp.csv"),
+                          pd.concat(ch_ae) if ch_ae else pd.DataFrame())]
             elif a.detectors == "arch":
                 store, meta, logs = run_dataset_arch(eid, farm, ev, feats, a)
                 sides = []

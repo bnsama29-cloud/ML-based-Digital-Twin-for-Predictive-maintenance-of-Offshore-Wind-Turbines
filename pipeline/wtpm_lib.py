@@ -797,6 +797,60 @@ ARCH_CONFIGS = {f"arch_{s}_{l}": (w, lr) for s, w in ARCH_SIZES.items()
 ARCH_REFERENCE = "arch_m_hi"
 
 
+# ------------------------------------------------------- run E: physics-structured thermal model
+# A component temperature obeys, to first order, C dT/dt = Q_loss - (T - T_amb)/R with losses
+# Q_loss = a1 P + a2 P^2 + a3 omega (mechanical, copper, friction). For a linear thermal network
+# the response to these inputs is a sum of first-order lags, so T(t) is modelled as a linear
+# combination of the inputs and their exponential moving averages (1 h and 6 h time constants),
+# fitted by ridge least squares on healthy fit rows. Fixed before the run.
+THERMAL_SPANS = (6, 36)          # 1 h and 6 h first-order lags (10-min rows)
+THERMAL_RIDGE = 1e-3
+
+
+def temperature_channels(columns: list[str], features: pd.DataFrame, col_sub: dict,
+                         exclude: set[str] = frozenset()) -> list[int]:
+    """Average-value temperature channels of components (not ambient / environment, not an
+    operating-condition input)."""
+    out = []
+    for i, c in enumerate(columns):
+        if not c.endswith("_avg"):
+            continue
+        b = base_sensor(c)
+        desc = str(features["description"].get(b, "")).lower() if b in features.index else ""
+        if "temperat" in desc and col_sub[c] not in ("ENVIRONMENT",) and b not in exclude:
+            out.append(i)
+    return out
+
+
+def thermal_inputs(prep: Prepared) -> np.ndarray:
+    """Physical inputs of the thermal model: ambient temperature, power fraction p, p^2 and
+    rotor-speed fraction, each also through first-order lags. p and rotor speed are divided by
+    their 99th percentile on the fit rows; columns are then standardised on the fit rows."""
+    op = np.asarray(prep.op, float)          # wind, power, rotor, ambient (OPERATING order)
+    fit = prep.fit_idx
+    p99 = np.nanpercentile(np.abs(op[fit, 1]), 99) or 1.0
+    w99 = np.nanpercentile(np.abs(op[fit, 2]), 99) or 1.0
+    p = np.clip(op[:, 1] / p99, 0, None)
+    base = np.column_stack([op[:, 3], p, p ** 2, np.clip(op[:, 2] / w99, 0, None)])
+    cols = [base] + [np.column_stack([ewma(base[:, k], span) for k in range(base.shape[1])])
+                     for span in THERMAL_SPANS]
+    F = np.column_stack(cols)
+    mu, sd = F[fit].mean(axis=0), F[fit].std(axis=0) + 1e-9
+    return (F - mu) / sd
+
+
+def fit_thermal(F: np.ndarray, Y: np.ndarray, fit_idx: np.ndarray,
+                ridge: float = THERMAL_RIDGE) -> np.ndarray:
+    """Ridge least squares of every temperature column of Y on [1, F] using the fit rows;
+    returns the predictions for all rows."""
+    A = np.column_stack([np.ones(len(F)), F])
+    Af, Yf = A[fit_idx], Y[fit_idx]
+    reg = ridge * len(fit_idx) * np.eye(A.shape[1])
+    reg[0, 0] = 0.0                                   # no penalty on the intercept
+    W = np.linalg.solve(Af.T @ Af + reg, Af.T @ Yf)
+    return A @ W
+
+
 # ------------------------------------------------------- run B: LSTM autoencoder
 
 LSTM_WINDOW = 6        # 1 h of 10-min rows, causal (the window ends at the scored row)

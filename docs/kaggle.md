@@ -47,6 +47,20 @@ and an in-sample per-farm oracle that serves only as a ceiling.
 Output: `results_v5.zip` with `tables/arch_search.csv`, `arch_bootstrap.csv`, `arch_val_loss.csv`
 (about 6.5 h on a T4).
 
+## Run E: physics-structured thermal model (optional, one notebook)
+Every component temperature channel (average values, not ambient, not an operating input) is
+modelled as a first-order thermal network: ambient temperature, load fraction p, p^2 (copper
+losses) and rotor-speed fraction, each also through 1 h and 6 h first-order lags, fitted by
+ridge least squares on healthy fit rows. Its squared residuals give a fault score and a
+plant-area attribution, compared with the AE (seed 0) on the same channels and with an
+"either" rule (AE or thermal).
+
+```python
+!python pipeline/run_all.py --detectors thermal --data-dir /tmp/care --out /tmp/results_e --zip /kaggle/working/results_v6.zip
+```
+Output: `results_v6.zip` with `care.csv` (methods `ae`, `thermal`, `ae_temp`),
+`attribution_thermal.csv`, `attribution_ae_temp.csv`, `complement.csv` (about 2.5 h on a T4).
+
 ## Notebook settings
 - Settings → **Internet on** (phone-verified account)
 - Accelerator → **GPU T4**
@@ -59,7 +73,7 @@ Output: `results_v5.zip` with `tables/arch_search.csv`, `arch_bootstrap.csv`, `a
 %cd /tmp/repo
 !python -m pytest -q tests
 ```
-The tests must report `48 passed`.
+The tests must report `51 passed`.
 
 ## Cell 2: run
 Run A:
@@ -74,7 +88,7 @@ Run B:
 ## Cell 3: download links
 ```python
 from IPython.display import FileLink, display
-for f in ("results_v3.zip", "results_v3_scores.zip"):  # run B: results_v3_lstm*.zip, run C: results_v4*.zip, run D: results_v5*.zip
+for f in ("results_v3.zip", "results_v3_scores.zip"):  # run B: results_v3_lstm*.zip, run C: results_v4*.zip, run D: results_v5*.zip, run E: results_v6*.zip
     display(FileLink(f))
 ```
 

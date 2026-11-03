@@ -52,10 +52,12 @@ def main():
                     help="stop starting new datasets after this many hours (Kaggle stops at 12)")
     ap.add_argument("--events", type=int, nargs="*", help="test on a few event ids only")
     ap.add_argument("--epochs", type=int, default=40)
-    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch"], default="main",
+    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch", "thermal"],
+                    default="main",
                     help="main = run A; lstm = run B (LSTM AE + timing, no case studies); "
                          "polish = run C (alarm rules, condition model, sensor faults); "
-                         "arch = run D (per-farm architecture search)")
+                         "arch = run D (per-farm architecture search); "
+                         "thermal = run E (physics-structured thermal model)")
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     bench = os.path.join(a.out, "benchmark")

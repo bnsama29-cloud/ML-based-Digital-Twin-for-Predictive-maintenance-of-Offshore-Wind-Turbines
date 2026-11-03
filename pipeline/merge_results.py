@@ -251,6 +251,40 @@ PAIRS = [("ae|smooth", "ae|raw"), ("ae|cn", "ae|raw"), ("ae|cn_smooth", "ae|smoo
          ("nbm|cn_smooth", "ae|cn_smooth"), ("nbm|smooth", "ae|smooth"), ("nbm|raw", "ae|raw")]
 
 
+ATTR_LABEL = {"nbm": "NBM", "thermal": "Thermal", "ae_temp": "AE (temperatures)"}
+
+
+def complement_table(raw, a_key="ae_s0", b_key="thermal", variant="cn_smooth") -> pd.DataFrame:
+    """Run E: CARE of the AE, the thermal model and an 'either' rule (a row is flagged when
+    either score exceeds its own threshold), plus which faults each one detects alone."""
+    ka, kb = f"{a_key}|{variant}", f"{b_key}|{variant}"
+    rows, det = {"a": [], "b": [], "either": []}, []
+    for meta, data in raw:
+        if ka not in data or kb not in data:
+            continue
+        fa = data[ka] > meta["thresholds"][ka]
+        fb = data[kb] > meta["thresholds"][kb]
+        for name, pred in (("a", fa), ("b", fb), ("either", fa | fb)):
+            r = L.care_event(pred, data["eval_normal"], data["in_window"], meta["label"])
+            rows[name].append(dict(event_id=meta["event_id"], farm=meta["farm"], **r))
+        det.append((meta["label"], rows["a"][-1]["detected"], rows["b"][-1]["detected"]))
+    if not det:
+        return pd.DataFrame()
+    out = []
+    for name, label in (("a", a_key), ("b", b_key), ("either", f"{a_key} or {b_key}")):
+        c = L.care_score(pd.DataFrame(rows[name]))
+        out.append(dict(rule=label, variant=variant, **c))
+    d = pd.DataFrame(det, columns=["label", "a", "b"])
+    an = d[d.label == "anomaly"]
+    out.append(dict(rule="faults detected only by " + a_key, variant=variant,
+                    detected=int((an.a & ~an.b).sum())))
+    out.append(dict(rule="faults detected only by " + b_key, variant=variant,
+                    detected=int((~an.a & an.b).sum())))
+    out.append(dict(rule="faults detected by both", variant=variant,
+                    detected=int((an.a & an.b).sum())))
+    return pd.DataFrame(out)
+
+
 def sensorfault_table(sf: pd.DataFrame) -> pd.DataFrame:
     """Sensor-fault tests: how often the corrupted channel is ranked first among all channels
     and its plant area first (vote rule), on normal datasets (no real fault to confuse)."""
@@ -336,15 +370,27 @@ def main():
     print("\n== CARE score ==\n" + care[care.farm == "all"][show].round(3).to_string(index=False))
 
     chans = [f for d in a.inputs for f in glob.glob(os.path.join(d, "channels.csv"))]
-    nbm = [f for d in a.inputs for f in glob.glob(os.path.join(d, "channels_nbm.csv"))]
-    if nbm:
+    extra = {}                      # channels_<name>.csv -> attribution_<name>.csv
+    for d in a.inputs:
+        for f in glob.glob(os.path.join(d, "channels_*.csv")):
+            extra.setdefault(os.path.basename(f)[len("channels_"):-4], []).append(f)
+    for name, files in sorted(extra.items()):
         try:
-            t = attribution_table(pd.concat([pd.read_csv(f) for f in nbm]), label="NBM")
-            t.to_csv(os.path.join(a.out, "attribution_nbm.csv"), index=False)
-            print("\n== attribution, condition model ==\n" + t.round(3).to_string(index=False))
+            t = attribution_table(pd.concat([pd.read_csv(f) for f in files]),
+                                  label=ATTR_LABEL.get(name, name))
+            t.to_csv(os.path.join(a.out, f"attribution_{name}.csv"), index=False)
+            print(f"\n== attribution, {name} ==\n" + t.round(3).to_string(index=False))
         except Exception:
             import traceback
             traceback.print_exc()
+    try:
+        t = complement_table(raw)
+        if len(t):
+            t.to_csv(os.path.join(a.out, "complement.csv"), index=False)
+            print("\n== AE and thermal model together ==\n" + t.round(3).to_string(index=False))
+    except Exception:
+        import traceback
+        traceback.print_exc()
     sfs = [f for d in a.inputs for f in glob.glob(os.path.join(d, "sensorfault.csv"))]
     if sfs:
         try:
