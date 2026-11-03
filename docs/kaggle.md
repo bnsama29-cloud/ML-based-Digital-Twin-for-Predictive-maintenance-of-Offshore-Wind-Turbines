@@ -92,7 +92,7 @@ for about 20 minutes, the dataset is skipped, and it is tried again at the end o
 %cd /tmp/repo
 !python -m pytest -q tests
 ```
-The tests must report `56 passed`.
+The tests must report `57 passed`.
 
 ## Cell 2: run
 Run A:

@@ -449,10 +449,11 @@ def test_arch_selection_helpers():
     assert orc["A"] == "good"
     ev = A.assemble(rows, lambda f, e: "good" if f == "A" else "bad")
     assert len(ev) == 6 and ev[ev.farm == "A"]["detected"].any()
-    log = pd.DataFrame(dict(event_id=[1, 1, 2, 2], base=["x_s0", "y_s0", "x_s0", "y_s0"],
+    log = pd.DataFrame(dict(event_id=[1, 1, 2, 2],
+                            base=["arch_s_hi_s0", "arch_l_hi_s0", "arch_s_hi_s0", "arch_l_hi_s0"],
                             epoch=0, train=1.0, val=[0.5, 0.4, 0.3, 0.6]))
     vf, vd = A.choose_by_val(A.best_val(log), {1: "A", 2: "A"})
-    assert vd == {1: "y", 2: "x"} and vf["A"] in {"x", "y"}
+    assert vd == {1: "arch_l_hi", 2: "arch_s_hi"} and vf["A"] in {"arch_s_hi", "arch_l_hi"}
     bt = A.paired_bootstrap(rows["good"], rows["bad"], n_boot=50)
     assert bt["diff"] > 0 and bt["ci_lo"] <= bt["diff"] <= bt["ci_hi"]
 
