@@ -24,3 +24,20 @@ window start, against 45.2 h in the Kaggle run whose numbers are in `case_40/`).
 
 Note on counts: in Zenodo record 15846963, `event_info.csv` marks 45 datasets as anomaly and
 50 as normal (the CARE article reports 44 / 51).
+
+## Follow-up run C (`followup_run_c/`)
+`run_all.py --detectors polish` on Kaggle (7.47 h, no failed steps, all 95 datasets): AE and the
+multi-target normal behaviour model (NBM) with 3 seeds each, Isolation Forest (3 seeds), PCA and
+3-sigma; every score also with EWMA and CUSUM alarm rules (variants `raw_ewma`, `raw_cusum`,
+`cn_ewma`, `cn_cusum`); sensor-fault tests on AE and NBM seed 0.
+
+| File | Content |
+|---|---|
+| `care.csv`, `bootstrap.csv`, `lofo.csv`, `counter_sensitivity.csv` | as above, including the new alarm rules and the NBM |
+| `attribution_nbm.csv` | plant-area attribution from NBM residual ratios (40 labelled faults) |
+| `sensorfault.csv` | normal datasets only: share of cases where the corrupted channel is ranked first / in the top 10, and its plant area first / in the top 3 |
+| `sensorfault_rows.csv` | one row per dataset × fault kind × model |
+| `robustness.csv` | CARE, detections and false alarms under drift, stuck and dropout faults |
+
+The AE was retrained in this run and moves by at most 0.009 CARE against run A (GPU
+non-determinism); IF, PCA and 3-sigma reproduce run A to four decimals.
