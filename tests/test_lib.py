@@ -582,3 +582,12 @@ def test_farm_file_finds_an_attached_copy_without_downloading(tmp_path, monkeypa
     flat.mkdir(parents=True)
     (flat / "0.csv").write_text("x")
     assert L.farm_file("datasets/0.csv", str(tmp_path), "A") == str(flat / "0.csv")
+
+
+def test_best_val_ignores_detectors_outside_the_search():
+    import arch_select as A
+    log = pd.DataFrame(dict(event_id=[1, 1, 1], base=["arch_s_hi_s0", "arch_l_hi_s0", "ae_avg_s0"],
+                            epoch=0, train=1.0, val=[0.5, 0.4, 0.1]))
+    bv = A.best_val(log)
+    assert set(bv["config"]) == {"arch_s_hi", "arch_l_hi"}
+    assert A.choose_by_val(bv, {1: "A"})[1] == {1: "arch_l_hi"}

@@ -31,6 +31,7 @@ def best_val(trainlog: pd.DataFrame) -> pd.DataFrame:
     """Best validation loss per dataset and configuration."""
     t = trainlog.copy()
     t["config"] = t["base"].str.replace(r"_s\d+$", "", regex=True)
+    t = t[t["config"].isin(L.ARCH_CONFIGS)]      # other detectors in the same run are ignored
     return t.groupby(["event_id", "config"])["val"].min().rename("best_val").reset_index()
 
 
