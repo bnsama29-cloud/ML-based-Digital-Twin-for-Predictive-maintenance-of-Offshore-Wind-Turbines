@@ -52,9 +52,10 @@ def main():
                     help="stop starting new datasets after this many hours (Kaggle stops at 12)")
     ap.add_argument("--events", type=int, nargs="*", help="test on a few event ids only")
     ap.add_argument("--epochs", type=int, default=40)
-    ap.add_argument("--detectors", choices=["main", "lstm", "polish"], default="main",
+    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch"], default="main",
                     help="main = run A; lstm = run B (LSTM AE + timing, no case studies); "
-                         "polish = run C (alarm rules, condition model, sensor faults)")
+                         "polish = run C (alarm rules, condition model, sensor faults); "
+                         "arch = run D (per-farm architecture search)")
     a = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     bench = os.path.join(a.out, "benchmark")
@@ -78,6 +79,9 @@ def main():
                       "--epochs", str(a.epochs), "--out", case], failures)
         step("result tables", [os.path.join(here, "merge_results.py"), "--inputs", bench,
                               "--out", tables], failures)
+        if a.detectors == "arch":
+            step("architecture search", [os.path.join(here, "arch_select.py"), "--inputs", bench,
+                                         "--out", tables], failures)
     finally:
         with open(os.path.join(a.out, "RUN_INFO.txt"), "w") as f:
             f.write(f"total time: {(time.time() - t0) / 3600:.2f} h\n")

@@ -34,6 +34,19 @@ Output: `results_v4.zip` (tables) and `results_v4_scores.zip`. New tables: `sens
 `attribution_nbm.csv`; the alarm rules appear as variants `raw_ewma`, `raw_cusum`, `cn_ewma`,
 `cn_cusum` in `care.csv`, `lofo.csv` and `bootstrap.csv`.
 
+## Run D: per-farm architecture search (optional, one notebook)
+The AE in six configurations fixed in advance (sizes 128-32-8, 256-64-16, 512-128-32 x learning
+rates 1e-3, 3e-4; seed 0) on all 95 datasets. `arch_select.py` then compares a single fixed
+configuration with a label-free choice per farm and per dataset (lowest validation loss), a choice
+made on the two other farms (configuration alone, or jointly with threshold quantile and counter),
+and an in-sample per-farm oracle that serves only as a ceiling.
+
+```python
+!python pipeline/run_all.py --detectors arch --data-dir /tmp/care --out /tmp/results_d --zip /kaggle/working/results_v5.zip
+```
+Output: `results_v5.zip` with `tables/arch_search.csv`, `arch_bootstrap.csv`, `arch_val_loss.csv`
+(about 6.5 h on a T4).
+
 ## Notebook settings
 - Settings → **Internet on** (phone-verified account)
 - Accelerator → **GPU T4**
@@ -46,7 +59,7 @@ Output: `results_v4.zip` (tables) and `results_v4_scores.zip`. New tables: `sens
 %cd /tmp/repo
 !python -m pytest -q tests
 ```
-The tests must report `46 passed`.
+The tests must report `48 passed`.
 
 ## Cell 2: run
 Run A:
@@ -61,7 +74,7 @@ Run B:
 ## Cell 3: download links
 ```python
 from IPython.display import FileLink, display
-for f in ("results_v3.zip", "results_v3_scores.zip"):  # run B: results_v3_lstm*.zip, run C: results_v4*.zip
+for f in ("results_v3.zip", "results_v3_scores.zip"):  # run B: results_v3_lstm*.zip, run C: results_v4*.zip, run D: results_v5*.zip
     display(FileLink(f))
 ```
 

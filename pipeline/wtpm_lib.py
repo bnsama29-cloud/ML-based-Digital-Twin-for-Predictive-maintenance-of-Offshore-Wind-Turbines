@@ -267,19 +267,21 @@ def prepare(df: pd.DataFrame, features: pd.DataFrame, max_missing: float = 0.30,
 
 # ------------------------------------------------------------------ models
 
-def _build_ae(d: int, c: int = 0, output: str = "linear"):
-    """Dense AE d-256-64-16-64-256-d. With c > 0 it is a conditional AE: the c operating
-    conditions are appended to the encoder input and to the code before decoding, so the
-    network only has to explain what the operating point does not."""
+def _build_ae(d: int, c: int = 0, output: str = "linear", widths=(256, 64, 16)):
+    """Dense AE d-256-64-16-64-256-d (other widths for the architecture search). With c > 0
+    it is a conditional AE: the c operating conditions are appended to the encoder input and
+    to the code before decoding, so the network only has to explain what the operating point
+    does not."""
+    w1, w2, w3 = widths
     from torch import nn
 
     class AE(nn.Module):
         def __init__(self):
             super().__init__()
-            self.enc = nn.Sequential(nn.Linear(d + c, 256), nn.ReLU(), nn.Linear(256, 64),
-                                     nn.ReLU(), nn.Linear(64, 16), nn.ReLU())
-            dec = [nn.Linear(16 + c, 64), nn.ReLU(), nn.Linear(64, 256), nn.ReLU(),
-                   nn.Linear(256, d)]
+            self.enc = nn.Sequential(nn.Linear(d + c, w1), nn.ReLU(), nn.Linear(w1, w2),
+                                     nn.ReLU(), nn.Linear(w2, w3), nn.ReLU())
+            dec = [nn.Linear(w3 + c, w2), nn.ReLU(), nn.Linear(w2, w1), nn.ReLU(),
+                   nn.Linear(w1, d)]
             if output == "sigmoid":
                 dec.append(nn.Sigmoid())
             self.dec = nn.Sequential(*dec)
@@ -294,7 +296,8 @@ def _build_ae(d: int, c: int = 0, output: str = "linear"):
 
 
 def train_autoencoder(X_fit, X_val, seed=0, output="linear", epochs=40, batch=256,
-                      lr=1e-3, patience=5, device=None, U_fit=None, U_val=None):
+                      lr=1e-3, patience=5, device=None, U_fit=None, U_val=None,
+                      widths=(256, 64, 16)):
     """Train the AE (conditional if U_fit is given). Returns a channel-error function
     errfn(X, U=None) and the training log [(epoch, train_loss, val_loss)]."""
     import torch
@@ -303,7 +306,7 @@ def train_autoencoder(X_fit, X_val, seed=0, output="linear", epochs=40, batch=25
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     d = X_fit.shape[1]
     c = 0 if U_fit is None else U_fit.shape[1]
-    model = _build_ae(d, c, output).to(device)
+    model = _build_ae(d, c, output, widths).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     xf = torch.from_numpy(X_fit).to(device)
     xv = torch.from_numpy(X_val).to(device)
@@ -782,6 +785,16 @@ def window_ratios(ch_err: np.ndarray, prep: Prepared, rows: np.ndarray) -> np.nd
     """Channel error ratio over arbitrary evaluation rows against the healthy validation rows."""
     base = ch_err[prep.val_idx].mean(axis=0) + 1e-8
     return ch_err[rows].mean(axis=0) / base
+
+
+# ------------------------------------------------------- run D: architecture search
+# Fixed before the run: three AE sizes x two learning rates, seed 0. 'arch_m_hi' is the AE of
+# the paper (256-64-16, lr 1e-3) and serves as the in-run reference.
+ARCH_SIZES = {"s": (128, 32, 8), "m": (256, 64, 16), "l": (512, 128, 32)}
+ARCH_LRS = {"hi": 1e-3, "lo": 3e-4}
+ARCH_CONFIGS = {f"arch_{s}_{l}": (w, lr) for s, w in ARCH_SIZES.items()
+                for l, lr in ARCH_LRS.items()}
+ARCH_REFERENCE = "arch_m_hi"
 
 
 # ------------------------------------------------------- run B: LSTM autoencoder

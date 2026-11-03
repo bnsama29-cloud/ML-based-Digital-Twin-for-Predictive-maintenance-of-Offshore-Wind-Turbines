@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline"))
 import wtpm_lib as L  # noqa: E402
 from analyze_case import time_to_threshold  # noqa: E402
+import arch_select  # noqa: E402,F401
 
 
 def test_criticality_counts_up_down_and_freezes_on_abnormal_status():
@@ -407,3 +408,50 @@ def test_window_ratios_and_sensorfault_table():
     t = M.sensorfault_table(sf)
     row = t.iloc[0]
     assert row.n == 2 and row.channel_top1 == 0.5 and row.area_top1 == 0.5 and row.area_top3 == 1.0
+
+
+# ------------------------------------------------------------- run D: architecture search
+
+def test_autoencoder_widths_and_arch_configs():
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(300, 6)).astype(np.float32)
+    fn, log = L.train_autoencoder(X[:200], X[200:], epochs=2, widths=(16, 8, 4), lr=3e-4)
+    assert fn(X).shape == X.shape and len(log) == 2
+    m = L._build_ae(6, widths=(16, 8, 4))
+    assert m.enc[0].out_features == 16 and m.enc[4].out_features == 4 and m.dec[-1].out_features == 6
+    assert len(L.ARCH_CONFIGS) == 6 and L.ARCH_CONFIGS[L.ARCH_REFERENCE] == ((256, 64, 16), 1e-3)
+
+
+def _arch_rows():
+    """Two configs on three farms: 'good' detects the farm-A fault, 'bad' does not."""
+    rows = {}
+    for key, hit in (("good", True), ("bad", False)):
+        evs = []
+        for farm, eid in (("A", 1), ("B", 2), ("C", 3)):
+            n = 100 if (hit and farm == "A") else 0
+            a = L.care_event(np.r_[np.zeros(50, bool), np.ones(n, bool), np.zeros(100 - n, bool)],
+                             np.ones(150, bool), np.r_[np.zeros(50, bool), np.ones(100, bool)],
+                             "anomaly")
+            b = L.care_event(np.zeros(150, bool), np.ones(150, bool), np.zeros(150, bool), "normal")
+            evs += [dict(a, farm=farm, event_id=eid), dict(b, farm=farm, event_id=eid + 10)]
+        rows[key] = pd.DataFrame(evs)
+    return rows
+
+
+def test_arch_selection_helpers():
+    import arch_select as A
+    rows = _arch_rows()
+    # the held-out farm never decides its own choice: for A, B and C carry no signal -> tie
+    lofo = A.lofo_pick(rows, ["A", "B", "C"])
+    assert lofo["B"] == "good" and lofo["C"] == "good"      # chosen on data that includes A
+    assert lofo["A"] == "bad"                                # A's own win is invisible -> tie, sorted first
+    orc = A.oracle_pick(rows, ["A", "B", "C"])
+    assert orc["A"] == "good"
+    ev = A.assemble(rows, lambda f, e: "good" if f == "A" else "bad")
+    assert len(ev) == 6 and ev[ev.farm == "A"]["detected"].any()
+    log = pd.DataFrame(dict(event_id=[1, 1, 2, 2], base=["x_s0", "y_s0", "x_s0", "y_s0"],
+                            epoch=0, train=1.0, val=[0.5, 0.4, 0.3, 0.6]))
+    vf, vd = A.choose_by_val(A.best_val(log), {1: "A", 2: "A"})
+    assert vd == {1: "y", 2: "x"} and vf["A"] in {"x", "y"}
+    bt = A.paired_bootstrap(rows["good"], rows["bad"], n_boot=50)
+    assert bt["diff"] > 0 and bt["ci_lo"] <= bt["diff"] <= bt["ci_hi"]

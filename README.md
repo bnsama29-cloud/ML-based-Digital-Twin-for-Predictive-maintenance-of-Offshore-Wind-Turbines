@@ -85,8 +85,9 @@ pipeline/          the validated pipeline
                      temperature model and Unity export (farm C)
   merge_results.py   stored scores -> result tables (merges run A and run B)
   make_figures.py    summary figures from the result tables
+  arch_select.py     run D: per-farm architecture choice (label-free, other farms, oracle)
   run_all.py         everything in one go, ends with a zip
-tests/             unit tests (46) for the library and the merge step
+tests/             unit tests (48) for the library and the merge step
 results/           tables and case studies of the final run
 figures/           framework diagram, summary and case-study figures
 docs/kaggle.md     how to reproduce the full run on Kaggle

@@ -12,6 +12,8 @@ AE seed 0 and PCA without retraining.
 Run B (--detectors lstm): LSTM AE (3 seeds) and compute times.
 Run C (--detectors polish): AE, condition model (NBM), IF (3 seeds each), PCA, 3-sigma, every
 score also post-processed with EWMA and CUSUM, plus sensor-fault tests (drift, stuck, dropout).
+Run D (--detectors arch): the AE in 6 configurations (3 sizes x 2 learning rates) for the
+architecture search, analysed by arch_select.py.
 
 Normally called by run_all.py. Resumable: datasets with an existing scores file are skipped.
 """
@@ -93,6 +95,24 @@ def store_scores(df, prep, ev, eid, farm, bases):
                 n_features=len(prep.columns), n_fit=int(len(prep.fit_idx)),
                 n_filtered=int(prep.n_filtered), thresholds=thresholds)
     return store, meta
+
+
+def run_dataset_arch(eid, farm, ev, feats, a):
+    """Run D (architecture search): the AE in six fixed configurations (3 sizes x 2 learning
+    rates, seed 0). The training log keeps every epoch's validation loss for label-free
+    selection; scores are stored like every other detector."""
+    df = L.load_dataset(eid, a.data_dir, farm)
+    prep = L.prepare(df, feats, farm=farm, train_filter=True)
+    X = prep.X
+    bases, logs = {}, []
+    for name, (widths, lr) in L.ARCH_CONFIGS.items():
+        errfn, log = L.train_autoencoder(X[prep.fit_idx], X[prep.val_idx], seed=0, lr=lr,
+                                         epochs=a.epochs, widths=widths)
+        bases[f"{name}_s0"] = (errfn(X).mean(axis=1), prep)
+        logs += [dict(event_id=eid, farm=farm, base=f"{name}_s0", epoch=e, train=t, val=v)
+                 for e, t, v in log]
+    store, meta = store_scores(df, prep, ev, eid, farm, bases)
+    return store, meta, logs
 
 
 def run_dataset_polish(eid, farm, ev, feats, a):
@@ -274,7 +294,7 @@ def main():
     ap.add_argument("--events", type=int, nargs="*", help="run only these event ids")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--keep-files", action="store_true", help="do not delete downloaded csv")
-    ap.add_argument("--detectors", choices=["main", "lstm", "polish"], default="main",
+    ap.add_argument("--detectors", choices=["main", "lstm", "polish", "arch"], default="main",
                     help="main = run A (all v3 detectors); lstm = run B (LSTM autoencoder only); "
                          "polish = run C (AE, NBM, IF, PCA, 3-sigma with EWMA/CUSUM rules and "
                          "sensor-fault tests)")
@@ -303,6 +323,9 @@ def main():
             if a.detectors == "lstm":
                 (store, meta), logs, chans = run_dataset_lstm(eid, farm, ev, feats, a)
                 sides = [(os.path.join(a.out, "timing.csv"), pd.DataFrame(chans))]
+            elif a.detectors == "arch":
+                store, meta, logs = run_dataset_arch(eid, farm, ev, feats, a)
+                sides = []
             elif a.detectors == "polish":
                 store, meta, logs, (chans, nbm_chans, faults) = run_dataset_polish(
                     eid, farm, ev, feats, a)
@@ -321,7 +344,8 @@ def main():
             with open(os.path.join(sdir, f"{farm}_{eid}.json"), "w") as f:
                 json.dump(meta, f)
             np.savez_compressed(npz, **store)        # written last: marks the dataset done
-            k0 = "lstm_s0|cn_smooth" if a.detectors == "lstm" else "ae_s0|cn_smooth"
+            k0 = {"lstm": "lstm_s0|cn_smooth", "arch": f"{L.ARCH_REFERENCE}_s0|cn_smooth"}.get(
+                a.detectors, "ae_s0|cn_smooth")
             crit = L.criticality(store[k0] > meta["thresholds"][k0], store["eval_normal"]).max()
             print(f"farm {farm} event {eid} ({meta['label']}): {meta['n_features']} features, "
                   f"{meta['n_filtered']} idle rows filtered, max criticality {crit}, "

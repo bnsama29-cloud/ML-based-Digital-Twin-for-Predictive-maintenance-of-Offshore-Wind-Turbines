@@ -292,6 +292,8 @@ def sigmoid_table(logs: pd.DataFrame) -> pd.DataFrame:
         return logs
     best = logs.groupby(["event_id", "base"])["val"].min().unstack()
     cols = [c for c in ("ae_s0", "ae_sigmoid_s0", "cae_s0", "lstm_s0") if c in best]
+    if not cols:                       # e.g. run D, which has none of these heads
+        return pd.DataFrame()
     return best[cols].describe().T.reset_index().rename(columns={"index": "base"})
 
 
