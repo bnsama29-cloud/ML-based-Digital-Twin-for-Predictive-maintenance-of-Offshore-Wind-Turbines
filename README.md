@@ -3,7 +3,7 @@
 Early fault detection, fault attribution and maintenance timing for wind turbines, built on
 the public **[CARE-to-Compare](https://zenodo.org/records/15846963)** benchmark
 (3 wind farms, 36 turbines, 95 datasets, 45 labelled faults, 50 normal periods),
-with a Unity scene that replays the turbine's measured state and the model's warnings.
+with a per-time-step export of measured values, score, alarm and health index for a Unity playback.
 
 ![Framework](figures/framework.png)
 

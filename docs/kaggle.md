@@ -1,8 +1,11 @@
 # Running the full experiment on Kaggle
 
-The whole study is two notebook runs: **run A** (all detectors, case studies, result tables)
-and **run B** (LSTM autoencoder and compute-time measurements). Run B is optional and can run
-in parallel on a second person's account. Each run downloads only the files it needs from
+The main study is two notebook runs: **run A** (all detectors, case studies, result tables)
+and **run B** (LSTM autoencoder and compute-time measurements); run B can run in parallel on a
+second account. The follow-up experiments in the paper come from **run C** (alarm rules, NBM,
+sensor faults), **run E** (thermal model, negative selection, history length) and **run G**
+(architecture search and average-value-only detectors; it supersedes runs D and F), described
+further down. Each run downloads only the files it needs from
 Zenodo and ends with a zip in the Output tab.
 
 | | Run A | Run B |
