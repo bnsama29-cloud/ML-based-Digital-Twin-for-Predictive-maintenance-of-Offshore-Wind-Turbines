@@ -32,7 +32,7 @@ def care_bars(tables, out):
         ax.bar(i + w / 2 + 0.01, t["care_lofo"], w, color=ORANGE, hatch="////", edgecolor="white",
                lw=0, yerr=t["care_lofo_sd"] or 0, error_kw=dict(lw=0.7, capsize=1.5, ecolor=INK),
                label="tuned leave-one-farm-out" if i == 0 else None)
-    for y, txt in ((0.5, "random 0.50"), (0.66, "tuned AE of CARE paper: 0.66")):
+    for y, txt in ((0.5, "random 0.50"), (0.66, "per-farm tuned AE: 0.66")):
         ax.axhline(y, color=MUTED, lw=0.7, ls="--")
         ax.text(len(order) - 0.5, y, " " + txt.replace(": ", "\n"), ha="left", va="center",
                 fontsize=6, color=MUTED, clip_on=False)
